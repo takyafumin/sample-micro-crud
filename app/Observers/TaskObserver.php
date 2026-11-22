@@ -50,13 +50,21 @@ class TaskObserver
     }
 
     /**
-     * The task's current auditable attributes (everything in Task::fields()).
+     * The task's current auditable attributes (everything in Task::fields()),
+     * read through the same cast-applying accessor as updated()'s before/after
+     * so CREATE/DELETE and UPDATE never disagree on a field's format.
      *
      * @return array<string, mixed>
      */
     private function snapshot(Task $task): array
     {
-        return array_intersect_key($task->getAttributes(), Task::fields());
+        $snapshot = [];
+
+        foreach (array_keys(Task::fields()) as $field) {
+            $snapshot[$field] = $task->getAttribute($field);
+        }
+
+        return $snapshot;
     }
 
     /**
