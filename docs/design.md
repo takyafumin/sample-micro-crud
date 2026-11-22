@@ -61,7 +61,7 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 ### 4.1 一覧・スプレッドシート風グリッド (`/tasks`)
 
 - 1行 = 1タスク。列は `title / status / assignee / due_date / notes / 操作`。
-- 各セルは通常時は表示用の `<span>`。クリック(`hx-get`)すると同じセル内で入力フォームに置き換わる。
+- 各セルは通常時は表示用の `<span>`。クリックするとAlpine.jsの状態切り替え(`x-show`)のみで同じセル内の入力フォームが表示される(サーバー通信なし)。
 - 入力後、blur または Enter で `hx-patch` を発行しサーバーに送信。
   - 成功: 表示用セルに戻り、新しい値を反映。
   - 失敗(バリデーションエラー): 入力フォームのまま、エラーメッセージをセル内に表示。
@@ -92,8 +92,7 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 |---|---|---|
 | GET | `/tasks` | 一覧・検索(htmxから呼ばれた場合は `<tbody>` 部分のみ返す) |
 | POST | `/tasks` | 新規作成 |
-| GET | `/tasks/{task}/cells/{field}/edit` | セルの編集フォームを返す |
-| PATCH | `/tasks/{task}/cells/{field}` | セル単位の更新 |
+| PATCH | `/tasks/{task}/cells/{field}` | セル単位の更新(表示⇔編集の切り替え自体はAlpine.jsのみで行うため、編集フォーム取得用のGETは不要) |
 | DELETE | `/tasks/{task}` | 削除 |
 | GET | `/audit-logs` | 操作ログ一覧 |
 
@@ -102,10 +101,10 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 ```
 resources/views/
   layouts/app.blade.php          # 共通レイアウト(htmx/Alpine.js読み込み)
-  tasks/index.blade.php          # 一覧ページ
-  tasks/partials/_row.blade.php  # 1行分(初期表示・htmx差し替え共用)
-  tasks/partials/_cell_display.blade.php
-  tasks/partials/_cell_edit.blade.php
+  tasks/index.blade.php           # 一覧ページ
+  tasks/partials/_rows.blade.php  # <tbody>内側(検索結果の差し替えに使用)
+  tasks/partials/_row.blade.php   # 1行分(初期表示・htmx差し替え共用)
+  tasks/partials/_cell.blade.php  # 1セル分。表示/編集の両方をAlpine.jsのx-showで切り替え
   audit-logs/index.blade.php
 ```
 
