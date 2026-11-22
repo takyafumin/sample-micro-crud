@@ -42,7 +42,7 @@
         hx-post="{{ route('tasks.store') }}"
         hx-target="#task-rows"
         hx-swap="beforeend"
-        hx-on::after-request="if (event.detail.successful) this.reset()"
+        hx-on:task-created="this.reset()"
         class="mt-4 flex max-w-sm items-start gap-2"
     >
         <div class="flex-1">

@@ -45,6 +45,26 @@ class TaskTest extends TestCase
         $this->assertNotNull($log);
         $this->assertSame('anonymous', $log->actor);
         $this->assertSame('新しいタスク', $log->changes['title']['after']);
+        $this->assertSame('TODO', $log->changes['status']['after']);
+    }
+
+    public function test_store_response_shows_default_status_badge(): void
+    {
+        $response = $this->post('/tasks', ['title' => '新しいタスク']);
+
+        // This class only renders when $task->status === 'TODO' is true in the
+        // freshly created (in-memory, not re-fetched) model.
+        $response->assertSee('bg-gray-200 text-gray-700', false);
+    }
+
+    public function test_store_after_search_with_no_results_removes_stale_placeholder(): void
+    {
+        Task::create(['title' => '既存タスク']);
+        $this->get('/tasks?'.http_build_query(['q' => '該当なし']));
+
+        $response = $this->post('/tasks', ['title' => '新しいタスク']);
+
+        $response->assertSee('no-tasks-row');
     }
 
     public function test_store_rejects_blank_title(): void
@@ -103,5 +123,24 @@ class TaskTest extends TestCase
         $log = AuditLog::where('entity_id', $task->id)->where('action', 'DELETE')->first();
         $this->assertNotNull($log);
         $this->assertSame('資料作成', $log->changes['title']['before']);
+    }
+
+    public function test_destroy_last_task_restores_empty_placeholder(): void
+    {
+        $task = Task::create(['title' => '資料作成']);
+
+        $response = $this->delete("/tasks/{$task->id}");
+
+        $response->assertSee('タスクがありません');
+    }
+
+    public function test_destroy_non_last_task_does_not_restore_placeholder(): void
+    {
+        $taskA = Task::create(['title' => 'タスクA']);
+        Task::create(['title' => 'タスクB']);
+
+        $response = $this->delete("/tasks/{$taskA->id}");
+
+        $response->assertDontSee('タスクがありません');
     }
 }

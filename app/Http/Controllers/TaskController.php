@@ -46,10 +46,9 @@ class TaskController extends Controller
 
         $task = Task::create($validator->validated());
 
-        return view('tasks.partials._row_created', [
-            'task' => $task,
-            'wasFirstTask' => Task::count() === 1,
-        ]);
+        return response()
+            ->view('tasks.partials._row_created', ['task' => $task])
+            ->header('HX-Trigger', 'task-created');
     }
 
     public function updateCell(Request $request, Task $task, string $field)
@@ -87,6 +86,10 @@ class TaskController extends Controller
     public function destroy(Task $task)
     {
         $task->delete();
+
+        if (Task::count() === 0) {
+            return view('tasks.partials._no_tasks_row_oob');
+        }
 
         return response('');
     }
