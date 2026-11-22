@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Assignee;
 use App\Models\Task;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -31,5 +32,18 @@ class AuditLogTest extends TestCase
 
         $response->assertSee('タスクA');
         $response->assertDontSee('タスクB');
+    }
+
+    public function test_index_filters_by_entity_id_and_type_without_mixing_entities(): void
+    {
+        // Task and Assignee ids both start at 1, so entity_id alone is ambiguous.
+        $task = Task::create(['title' => 'タスクA']);
+        $assignee = Assignee::create(['name' => '佐藤']);
+        $this->assertSame($task->id, $assignee->id);
+
+        $response = $this->get("/audit-logs?entity_id={$task->id}&entity_type=Task");
+
+        $response->assertSee('タスクA');
+        $response->assertDontSee('佐藤');
     }
 }

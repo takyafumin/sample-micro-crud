@@ -29,6 +29,9 @@
                     {{ $task->{$field} }}
                 @endif
                 @break
+            @case('assignee')
+                {{ $task->assignee?->name }}
+                @break
             @case('date')
                 {{ $task->{$field}?->format('Y-m-d') }}
                 @break
@@ -55,6 +58,28 @@
                 >
                     @foreach (\App\Models\Task::STATUSES as $status)
                         <option value="{{ $status }}" @selected($currentValue === $status)>{{ $status }}</option>
+                    @endforeach
+                </select>
+                @break
+
+            @case('assignee')
+                @php
+                    // Memoized per request (not per cell) so rendering N rows
+                    // doesn't issue N identical queries for the same dropdown.
+                    $assigneeOptions = once(fn () => \App\Models\Assignee::orderBy('name')->pluck('name', 'id'));
+                @endphp
+                <select
+                    x-ref="field"
+                    name="value"
+                    hx-patch="{{ $patchUrl }}"
+                    hx-target="closest td"
+                    hx-swap="innerHTML"
+                    hx-trigger="change"
+                    class="w-full rounded border border-blue-400 px-1 py-0.5 text-sm"
+                >
+                    <option value="" @selected(! $currentValue)>(未設定)</option>
+                    @foreach ($assigneeOptions as $id => $name)
+                        <option value="{{ $id }}" @selected((string) $currentValue === (string) $id)>{{ $name }}</option>
                     @endforeach
                 </select>
                 @break

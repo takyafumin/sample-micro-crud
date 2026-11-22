@@ -7,7 +7,7 @@
 
     @if ($entityId)
         <p class="mb-4 text-sm text-gray-600">
-            Task #{{ $entityId }} の操作ログのみ表示中。
+            {{ $entityType }} #{{ $entityId }} の操作ログのみ表示中。
             <a href="{{ route('audit-logs.index') }}" class="text-blue-600 hover:underline">すべて表示</a>
         </p>
     @endif
@@ -40,11 +40,16 @@
                         <td class="px-2 py-2">
                             <ul class="space-y-0.5">
                                 @foreach ($log->changes as $field => $diff)
+                                    @php
+                                        $resolve = fn ($value) => $log->entity_type === 'Task' && $field === 'assignee_id' && $value !== null
+                                            ? ($assigneeNames[$value] ?? "ID:{$value}")
+                                            : $value;
+                                    @endphp
                                     <li>
                                         <span class="font-medium">{{ $field }}</span>:
-                                        <span class="text-gray-500">{{ $diff['before'] ?? '(空)' }}</span>
+                                        <span class="text-gray-500">{{ $resolve($diff['before']) ?? '(空)' }}</span>
                                         →
-                                        <span>{{ $diff['after'] ?? '(空)' }}</span>
+                                        <span>{{ $resolve($diff['after']) ?? '(空)' }}</span>
                                     </li>
                                 @endforeach
                             </ul>
