@@ -51,10 +51,10 @@
 ## 5. リリース手順(CLAUDE.mdのPRワークフローに従う)
 
 - [x] 自己レビュー(code-reviewスキル / サブエージェント、8観点で実施。5件のバグを修正済み)
-- [ ] `gh pr create` でPR作成(`Closes #1` を本文に含める)
-- [ ] GitHub Copilotへレビュー依頼(Web UIから)
-- [ ] 指摘対応 → 再レビュー(「🟢 Approval recommended」まで)
-- [ ] マージ
+- [x] `gh pr create` でPR作成([#2](https://github.com/takyafumin/sample-micro-crud/pull/2)、`Closes #1`)
+- [x] Copilotが使えないためサブエージェントでレビュー依頼(計3ラウンド)
+- [x] 指摘対応 → 再レビュー(🟢 Approval recommendedまで到達)
+- [x] マージ(PR #2。レビュー中の最後の修正がタイミングの関係で漏れたため、[#3](https://github.com/takyafumin/sample-micro-crud/pull/3)として追加修正・マージ済み)
 
 ## 今回やらないこと(スコープ外・設計書参照)
 
