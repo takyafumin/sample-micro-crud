@@ -90,7 +90,7 @@ class TaskController extends Controller
     {
         $task->delete();
 
-        if (Task::count() === 0) {
+        if (Task::query()->doesntExist()) {
             return view('tasks.partials._no_tasks_row_oob');
         }
 

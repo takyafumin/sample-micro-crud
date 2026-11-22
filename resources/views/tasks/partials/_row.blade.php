@@ -13,7 +13,7 @@
             hx-confirm="このタスクを削除しますか?"
             class="text-xs text-red-600 hover:underline"
         >削除</button>
-        <a href="{{ route('audit-logs.index', ['entity_id' => $task->id]) }}" class="ml-2 text-xs text-gray-500 hover:underline">
+        <a href="{{ route('audit-logs.index', ['entity_id' => $task->id, 'entity_type' => 'Task']) }}" class="ml-2 text-xs text-gray-500 hover:underline">
             ログ
         </a>
     </td>

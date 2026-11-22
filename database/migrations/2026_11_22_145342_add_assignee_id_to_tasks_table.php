@@ -18,8 +18,10 @@ return new class extends Migration
         });
 
         // Migrate the existing free-text assignee names into the new assignees
-        // master table, then point each task at the matching row.
-        $names = DB::table('tasks')->whereNotNull('assignee')->distinct()->pluck('assignee');
+        // master table, then point each task at the matching row. Treat '' the
+        // same as NULL: the new assignees.name column requires a real name.
+        $names = DB::table('tasks')->whereNotNull('assignee')->where('assignee', '!=', '')
+            ->distinct()->pluck('assignee');
 
         foreach ($names as $name) {
             $assigneeId = DB::table('assignees')->insertGetId([

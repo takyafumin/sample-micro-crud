@@ -12,7 +12,7 @@
             hx-confirm="この担当者を削除しますか?(担当中のタスクは担当者未設定になります)"
             class="text-xs text-red-600 hover:underline"
         >削除</button>
-        <a href="{{ route('audit-logs.index', ['entity_id' => $assignee->id]) }}" class="ml-2 text-xs text-gray-500 hover:underline">
+        <a href="{{ route('audit-logs.index', ['entity_id' => $assignee->id, 'entity_type' => 'Assignee']) }}" class="ml-2 text-xs text-gray-500 hover:underline">
             ログ
         </a>
     </td>

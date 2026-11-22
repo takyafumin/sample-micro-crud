@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Assignee;
+use App\Models\Task;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
@@ -30,7 +31,8 @@ class AssigneeController extends Controller
         }
 
         $assignee = Assignee::create($validator->validated());
-        $assignee->loadCount('tasks');
+        // A brand-new assignee provably has 0 tasks; skip the COUNT query.
+        $assignee->setAttribute('tasks_count', 0);
 
         return response()
             ->view('assignees.partials._row_created', ['assignee' => $assignee])
@@ -65,9 +67,15 @@ class AssigneeController extends Controller
 
     public function destroy(Assignee $assignee)
     {
+        // Unassign through Eloquent (not the DB's nullOnDelete FK action) so
+        // TaskObserver fires and the affected tasks' UPDATE is audit-logged.
+        $assignee->tasks()->get()->each(function (Task $task) {
+            $task->update(['assignee_id' => null]);
+        });
+
         $assignee->delete();
 
-        if (Assignee::count() === 0) {
+        if (Assignee::query()->doesntExist()) {
             return view('assignees.partials._no_assignees_row_oob');
         }
 

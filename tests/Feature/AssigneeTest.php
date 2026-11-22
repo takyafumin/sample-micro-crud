@@ -101,4 +101,17 @@ class AssigneeTest extends TestCase
         $log = AuditLog::where('entity_type', 'Assignee')->where('entity_id', $assignee->id)->where('action', 'DELETE')->first();
         $this->assertNotNull($log);
     }
+
+    public function test_destroy_records_audit_log_for_each_unassigned_task(): void
+    {
+        $assignee = Assignee::create(['name' => '田中']);
+        $task = Task::create(['title' => 'タスクA', 'assignee_id' => $assignee->id]);
+
+        $this->delete("/assignees/{$assignee->id}");
+
+        $log = AuditLog::where('entity_type', 'Task')->where('entity_id', $task->id)->where('action', 'UPDATE')->first();
+        $this->assertNotNull($log);
+        $this->assertSame($assignee->id, $log->changes['assignee_id']['before']);
+        $this->assertNull($log->changes['assignee_id']['after']);
+    }
 }
