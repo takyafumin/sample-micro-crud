@@ -12,17 +12,7 @@ class TaskObserver
      */
     public function created(Task $task): void
     {
-        $changes = [];
-
-        foreach ($task->getAttributes() as $field => $value) {
-            if (in_array($field, ['id', 'created_at', 'updated_at'], true)) {
-                continue;
-            }
-
-            $changes[$field] = ['before' => null, 'after' => $value];
-        }
-
-        $this->record($task, 'CREATE', $changes);
+        $this->record($task, 'CREATE', $this->diff(null, $this->snapshot($task)));
     }
 
     /**
@@ -30,24 +20,15 @@ class TaskObserver
      */
     public function updated(Task $task): void
     {
-        $changes = [];
+        $after = array_intersect_key($task->getChanges(), Task::FIELDS);
 
-        foreach ($task->getChanges() as $field => $after) {
-            if (in_array($field, ['updated_at'], true)) {
-                continue;
-            }
-
-            $changes[$field] = [
-                'before' => $task->getOriginal($field),
-                'after' => $after,
-            ];
-        }
-
-        if ($changes === []) {
+        if ($after === []) {
             return;
         }
 
-        $this->record($task, 'UPDATE', $changes);
+        $before = array_intersect_key($task->getOriginal(), $after);
+
+        $this->record($task, 'UPDATE', $this->diff($before, $after));
     }
 
     /**
@@ -55,17 +36,36 @@ class TaskObserver
      */
     public function deleted(Task $task): void
     {
+        $this->record($task, 'DELETE', $this->diff($this->snapshot($task), null));
+    }
+
+    /**
+     * The task's current auditable attributes (everything in Task::FIELDS).
+     *
+     * @return array<string, mixed>
+     */
+    private function snapshot(Task $task): array
+    {
+        return array_intersect_key($task->getAttributes(), Task::FIELDS);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $before
+     * @param  array<string, mixed>|null  $after
+     * @return array<string, array{before: mixed, after: mixed}>
+     */
+    private function diff(?array $before, ?array $after): array
+    {
         $changes = [];
 
-        foreach ($task->getAttributes() as $field => $value) {
-            if (in_array($field, ['id', 'created_at', 'updated_at'], true)) {
-                continue;
-            }
-
-            $changes[$field] = ['before' => $value, 'after' => null];
+        foreach (array_keys($before ?? $after ?? []) as $field) {
+            $changes[$field] = [
+                'before' => $before[$field] ?? null,
+                'after' => $after[$field] ?? null,
+            ];
         }
 
-        $this->record($task, 'DELETE', $changes);
+        return $changes;
     }
 
     /**
@@ -74,7 +74,7 @@ class TaskObserver
     private function record(Task $task, string $action, array $changes): void
     {
         AuditLog::create([
-            'entity_type' => 'Task',
+            'entity_type' => class_basename($task),
             'entity_id' => $task->id,
             'action' => $action,
             'changes' => $changes,

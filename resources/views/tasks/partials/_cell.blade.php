@@ -6,33 +6,46 @@
     $patchUrl = route('tasks.cells.update', [$task, $field]);
 @endphp
 
-<div x-data="{ editing: {{ $editing ? 'true' : 'false' }} }" class="group relative">
+<div
+    x-data="{ editing: {{ $editing ? 'true' : 'false' }}, original: null }"
+    x-init="original = $refs.field.value"
+    class="group relative"
+>
     <span
         x-show="!editing"
         @click="editing = true"
         class="block min-h-[1.5rem] cursor-text rounded px-1 py-0.5 group-hover:bg-blue-50"
     >
-        @switch($field)
-            @case('status')
-                <span class="rounded px-1.5 py-0.5 text-xs font-medium
-                    @class([
-                        'bg-gray-200 text-gray-700' => $task->status === 'TODO',
-                        'bg-amber-100 text-amber-800' => $task->status === 'IN_PROGRESS',
-                        'bg-green-100 text-green-800' => $task->status === 'DONE',
-                    ])">{{ $task->status }}</span>
+        @switch($type)
+            @case('select')
+                @if ($field === 'status')
+                    <span class="rounded px-1.5 py-0.5 text-xs font-medium
+                        @class([
+                            'bg-gray-200 text-gray-700' => $task->status === 'TODO',
+                            'bg-amber-100 text-amber-800' => $task->status === 'IN_PROGRESS',
+                            'bg-green-100 text-green-800' => $task->status === 'DONE',
+                        ])">{{ $task->status }}</span>
+                @else
+                    {{ $task->{$field} }}
+                @endif
                 @break
-            @case('due_date')
-                {{ $task->due_date?->format('Y-m-d') }}
+            @case('date')
+                {{ $task->{$field}?->format('Y-m-d') }}
                 @break
             @default
                 {{ $task->{$field} }}
         @endswitch
     </span>
 
-    <div x-show="editing" x-cloak x-on:keydown.escape="editing = false">
+    <div
+        x-show="editing"
+        x-cloak
+        x-on:keydown.escape="$refs.field.value = original; editing = false"
+    >
         @switch($type)
             @case('select')
                 <select
+                    x-ref="field"
                     name="value"
                     hx-patch="{{ $patchUrl }}"
                     hx-target="closest td"
@@ -48,6 +61,7 @@
 
             @case('textarea')
                 <textarea
+                    x-ref="field"
                     name="value"
                     hx-patch="{{ $patchUrl }}"
                     hx-target="closest td"
@@ -60,6 +74,7 @@
 
             @case('date')
                 <input
+                    x-ref="field"
                     type="date"
                     name="value"
                     value="{{ $currentValue instanceof \Illuminate\Support\Carbon ? $currentValue->format('Y-m-d') : $currentValue }}"
@@ -73,6 +88,7 @@
 
             @default
                 <input
+                    x-ref="field"
                     type="text"
                     name="value"
                     value="{{ $currentValue }}"

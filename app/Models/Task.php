@@ -28,6 +28,12 @@ class Task extends Model
         'notes',
     ];
 
+    // Mirrors the DB column default so a freshly created Task already has
+    // 'status' in memory (Eloquent does not re-fetch DB-applied defaults).
+    protected $attributes = [
+        'status' => 'TODO',
+    ];
+
     protected $casts = [
         'due_date' => 'date',
     ];
