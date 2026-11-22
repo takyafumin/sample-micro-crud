@@ -16,7 +16,7 @@
 - [x] `AuditLog` モデルを実装(fillable, キャスト)
 - [x] `TaskObserver` を実装し、`created` / `updated` / `deleted` で `AuditLog` に差分を記録する
 - [x] Observerを `AppServiceProvider` に登録する
-- [ ] 動作確認用のSeeder/Factoryを作成する(任意、デモデータ投入用)
+- [x] 動作確認用のSeeder/Factoryを作成する(任意、デモデータ投入用) → `database/seeders/TaskSeeder.php`
 
 ## 2. バックエンド(ルーティング・コントローラ)
 
