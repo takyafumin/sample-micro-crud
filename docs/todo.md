@@ -50,7 +50,7 @@
 
 ## 5. リリース手順(CLAUDE.mdのPRワークフローに従う)
 
-- [ ] 自己レビュー(code-reviewスキル / サブエージェント)
+- [x] 自己レビュー(code-reviewスキル / サブエージェント、8観点で実施。5件のバグを修正済み)
 - [ ] `gh pr create` でPR作成(`Closes #1` を本文に含める)
 - [ ] GitHub Copilotへレビュー依頼(Web UIから)
 - [ ] 指摘対応 → 再レビュー(「🟢 Approval recommended」まで)
