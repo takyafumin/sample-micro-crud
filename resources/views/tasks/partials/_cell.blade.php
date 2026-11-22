@@ -1,5 +1,5 @@
 @php
-    $type = \App\Models\Task::FIELDS[$field]['type'];
+    $type = \App\Models\Task::fields()[$field]['type'];
     // On a validation error we must show exactly what the user submitted (even if empty/null),
     // not fall back to the task's stored value.
     $currentValue = $error ? $value : $task->{$field};

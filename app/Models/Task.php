@@ -11,14 +11,24 @@ class Task extends Model
 
     public const STATUSES = ['TODO', 'IN_PROGRESS', 'DONE'];
 
-    /** Editable columns, in display order, with their input type and validation rule. */
-    public const FIELDS = [
-        'title' => ['type' => 'text', 'rule' => 'required|string|max:255'],
-        'status' => ['type' => 'select', 'rule' => 'required|in:TODO,IN_PROGRESS,DONE'],
-        'assignee' => ['type' => 'text', 'rule' => 'nullable|string|max:255'],
-        'due_date' => ['type' => 'date', 'rule' => 'nullable|date'],
-        'notes' => ['type' => 'textarea', 'rule' => 'nullable|string|max:2000'],
-    ];
+    /**
+     * Editable columns, in display order, with their input type and validation rule.
+     *
+     * A method rather than a constant so the 'status' rule can be built from
+     * STATUSES instead of duplicating its values in a hardcoded rule string.
+     *
+     * @return array<string, array{type: string, rule: string}>
+     */
+    public static function fields(): array
+    {
+        return [
+            'title' => ['type' => 'text', 'rule' => 'required|string|max:255'],
+            'status' => ['type' => 'select', 'rule' => 'required|in:'.implode(',', self::STATUSES)],
+            'assignee' => ['type' => 'text', 'rule' => 'nullable|string|max:255'],
+            'due_date' => ['type' => 'date', 'rule' => 'nullable|date'],
+            'notes' => ['type' => 'textarea', 'rule' => 'nullable|string|max:2000'],
+        ];
+    }
 
     protected $fillable = [
         'title',
@@ -40,6 +50,6 @@ class Task extends Model
 
     public static function validationRuleFor(string $field): string
     {
-        return self::FIELDS[$field]['rule'] ?? throw new \InvalidArgumentException("Unknown field [{$field}]");
+        return self::fields()[$field]['rule'] ?? throw new \InvalidArgumentException("Unknown field [{$field}]");
     }
 }

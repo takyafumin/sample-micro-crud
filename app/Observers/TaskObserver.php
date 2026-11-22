@@ -20,13 +20,23 @@ class TaskObserver
      */
     public function updated(Task $task): void
     {
-        $after = array_intersect_key($task->getChanges(), Task::FIELDS);
+        $changedFields = array_intersect(array_keys($task->getChanges()), array_keys(Task::fields()));
 
-        if ($after === []) {
+        if ($changedFields === []) {
             return;
         }
 
-        $before = array_intersect_key($task->getOriginal(), $after);
+        // Read both sides through the same cast-applying accessor (getAttribute),
+        // not the raw getChanges()/getOriginal() arrays, so e.g. a 'date' cast
+        // field doesn't end up with a cast value on one side and a raw string
+        // on the other.
+        $before = [];
+        $after = [];
+
+        foreach ($changedFields as $field) {
+            $before[$field] = $task->getOriginal($field);
+            $after[$field] = $task->getAttribute($field);
+        }
 
         $this->record($task, 'UPDATE', $this->diff($before, $after));
     }
@@ -40,13 +50,13 @@ class TaskObserver
     }
 
     /**
-     * The task's current auditable attributes (everything in Task::FIELDS).
+     * The task's current auditable attributes (everything in Task::fields()).
      *
      * @return array<string, mixed>
      */
     private function snapshot(Task $task): array
     {
-        return array_intersect_key($task->getAttributes(), Task::FIELDS);
+        return array_intersect_key($task->getAttributes(), Task::fields());
     }
 
     /**

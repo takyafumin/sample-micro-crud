@@ -53,7 +53,7 @@ class TaskController extends Controller
 
     public function updateCell(Request $request, Task $task, string $field)
     {
-        abort_unless(array_key_exists($field, Task::FIELDS), 404);
+        abort_unless(array_key_exists($field, Task::fields()), 404);
 
         $rawValue = $request->input('value');
 
