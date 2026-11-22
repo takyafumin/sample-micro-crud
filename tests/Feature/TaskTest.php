@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Assignee;
 use App\Models\AuditLog;
 use App\Models\Task;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -30,6 +31,19 @@ class TaskTest extends TestCase
 
         $response->assertSee('会議設定');
         $response->assertDontSee('資料作成');
+    }
+
+    public function test_index_filters_by_assignee_name(): void
+    {
+        $tanaka = Assignee::create(['name' => '田中']);
+        $sato = Assignee::create(['name' => '佐藤']);
+        Task::create(['title' => 'タスクA', 'assignee_id' => $tanaka->id]);
+        Task::create(['title' => 'タスクB', 'assignee_id' => $sato->id]);
+
+        $response = $this->get('/tasks?'.http_build_query(['q' => '田中']));
+
+        $response->assertSee('タスクA');
+        $response->assertDontSee('タスクB');
     }
 
     public function test_store_creates_task_and_records_audit_log(): void
@@ -89,6 +103,43 @@ class TaskTest extends TestCase
         $this->assertNotNull($log);
         $this->assertSame('TODO', $log->changes['status']['before']);
         $this->assertSame('DONE', $log->changes['status']['after']);
+    }
+
+    public function test_update_cell_sets_assignee_and_records_audit_log(): void
+    {
+        $task = Task::create(['title' => '資料作成']);
+        $assignee = Assignee::create(['name' => '田中']);
+
+        $response = $this->patch("/tasks/{$task->id}/cells/assignee_id", ['value' => (string) $assignee->id]);
+
+        $response->assertStatus(200);
+        $this->assertSame($assignee->id, $task->fresh()->assignee_id);
+        $response->assertSee('田中');
+
+        $log = AuditLog::where('entity_id', $task->id)->where('action', 'UPDATE')->first();
+        $this->assertNotNull($log);
+        $this->assertSame($assignee->id, $log->changes['assignee_id']['after']);
+    }
+
+    public function test_update_cell_rejects_unknown_assignee_id(): void
+    {
+        $task = Task::create(['title' => '資料作成']);
+
+        $response = $this->patch("/tasks/{$task->id}/cells/assignee_id", ['value' => '999']);
+
+        $response->assertStatus(200);
+        $this->assertNull($task->fresh()->assignee_id);
+    }
+
+    public function test_update_cell_can_unassign(): void
+    {
+        $assignee = Assignee::create(['name' => '田中']);
+        $task = Task::create(['title' => '資料作成', 'assignee_id' => $assignee->id]);
+
+        $response = $this->patch("/tasks/{$task->id}/cells/assignee_id", ['value' => '']);
+
+        $response->assertStatus(200);
+        $this->assertNull($task->fresh()->assignee_id);
     }
 
     public function test_update_cell_rejects_invalid_value_and_does_not_update(): void

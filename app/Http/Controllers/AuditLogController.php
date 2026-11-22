@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Assignee;
 use App\Models\AuditLog;
 use Illuminate\Http\Request;
 
@@ -17,6 +18,11 @@ class AuditLogController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        return view('audit-logs.index', ['logs' => $logs, 'entityId' => $entityId]);
+        return view('audit-logs.index', [
+            'logs' => $logs,
+            'entityId' => $entityId,
+            // Lets the view show "assignee_id: 2 → 5" as names instead of bare ids.
+            'assigneeNames' => Assignee::pluck('name', 'id'),
+        ]);
     }
 }

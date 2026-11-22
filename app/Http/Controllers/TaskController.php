@@ -13,11 +13,14 @@ class TaskController extends Controller
         $query = trim((string) $request->query('q', ''));
 
         $tasks = Task::query()
+            ->with('assignee')
             ->when($query !== '', function ($builder) use ($query) {
                 $builder->where(function ($builder) use ($query) {
                     $builder->where('title', 'like', "%{$query}%")
-                        ->orWhere('assignee', 'like', "%{$query}%")
-                        ->orWhere('notes', 'like', "%{$query}%");
+                        ->orWhere('notes', 'like', "%{$query}%")
+                        ->orWhereHas('assignee', function ($builder) use ($query) {
+                            $builder->where('name', 'like', "%{$query}%");
+                        });
                 });
             })
             ->orderByDesc('id')

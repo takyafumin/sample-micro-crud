@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Task extends Model
 {
@@ -24,16 +25,22 @@ class Task extends Model
         return [
             'title' => ['type' => 'text', 'rule' => 'required|string|max:255'],
             'status' => ['type' => 'select', 'rule' => 'required|in:'.implode(',', self::STATUSES)],
-            'assignee' => ['type' => 'text', 'rule' => 'nullable|string|max:255'],
+            'assignee_id' => ['type' => 'assignee', 'rule' => 'nullable|exists:assignees,id'],
             'due_date' => ['type' => 'date', 'rule' => 'nullable|date'],
             'notes' => ['type' => 'textarea', 'rule' => 'nullable|string|max:2000'],
         ];
     }
 
+    /** @return array<int, string> */
+    public static function auditableFields(): array
+    {
+        return array_keys(self::fields());
+    }
+
     protected $fillable = [
         'title',
         'status',
-        'assignee',
+        'assignee_id',
         'due_date',
         'notes',
     ];
@@ -46,10 +53,19 @@ class Task extends Model
 
     protected $casts = [
         'due_date' => 'date',
+        // Without this, mass-assigning the raw string from a form submission
+        // (e.g. '1') leaves assignee_id as a string in memory until the model
+        // is refetched, so e.g. the audit log would record "1" instead of 1.
+        'assignee_id' => 'integer',
     ];
 
     public static function validationRuleFor(string $field): string
     {
         return self::fields()[$field]['rule'] ?? throw new \InvalidArgumentException("Unknown field [{$field}]");
+    }
+
+    public function assignee(): BelongsTo
+    {
+        return $this->belongsTo(Assignee::class);
     }
 }

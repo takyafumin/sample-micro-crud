@@ -56,9 +56,20 @@
 - [x] 指摘対応 → 再レビュー(🟢 Approval recommendedまで到達)
 - [x] マージ(PR #2。レビュー中の最後の修正がタイミングの関係で漏れたため、[#3](https://github.com/takyafumin/sample-micro-crud/pull/3)として追加修正・マージ済み)
 
+## 6. 担当者のマスタ化 (Issue #5)
+
+- [x] `assignees` テーブル作成 + `tasks.assignee_id` 追加(既存データの移行込み)マイグレーション
+- [x] `Assignee` モデル・`Task` とのリレーション
+- [x] 操作ログObserverを `RecordsAuditLog` トレイトに共通化し `AssigneeObserver` を追加
+- [x] `AssigneeController`(一覧・追加・インライン改名・削除)+ ルーティング + 画面
+- [x] タスクの担当者セルを `assignees` からの選択式に変更
+- [x] 操作ログ画面で `assignee_id` を名前表示に解決
+- [x] `TaskSeeder` を担当者マスタ対応に更新
+- [x] Feature test追加(`AssigneeTest.php`、`TaskTest.php` に担当者関連ケース追加)
+- [x] ブラウザで動作確認(選択・検索・担当者の追加/改名/重複エラー/削除時のnull化)
+
 ## 今回やらないこと(スコープ外・設計書参照)
 
 - 認証・認可
-- 複数テーブル・リレーション
 - ページネーション
 - 列追加/削除などのスキーマ変更UI

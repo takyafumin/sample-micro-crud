@@ -35,12 +35,20 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 | id | bigint | PK, auto increment | |
 | title | string(255) | NOT NULL | 必須 |
 | status | string | NOT NULL, default `TODO` | `TODO` / `IN_PROGRESS` / `DONE` のいずれか |
-| assignee | string(255) | NULL可 | 担当者名(自由入力。認証導入後はユーザー参照に変更予定) |
+| assignee_id | unsigned bigint | NULL可, FK → `assignees.id` (`nullOnDelete`) | 担当者。Issue #5 で自由入力から `assignees` マスタへの参照に変更 |
 | due_date | date | NULL可 | |
 | notes | text | NULL可, max 2000字 | |
 | created_at / updated_at | timestamp | | |
 
-将来的に複数テーブル・リレーションを追加する想定(今回はスコープ外)。
+### 3.1.1 `assignees` テーブル (Issue #5 で追加)
+
+| カラム | 型 | 制約 | 備考 |
+|---|---|---|---|
+| id | bigint | PK | |
+| name | string(255) | NOT NULL, UNIQUE | |
+| created_at / updated_at | timestamp | | |
+
+担当者を削除すると、紐づくタスクの `assignee_id` は `NULL` になる(タスク自体は削除されない)。
 
 ### 3.2 `audit_logs` テーブル (操作ログ)
 
@@ -54,7 +62,9 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 | actor | string | 操作者。認証が無い間は `anonymous` 固定 |
 | created_at | timestamp | |
 
-**記録方法**: Eloquentの [Observer](https://laravel.com/docs/eloquent#observers) (`App\Observers\TaskObserver`) で `created` / `updated` / `deleted` イベントを捕捉し、差分を計算して `AuditLog` に書き込む。サードパーティの監査ログパッケージ(`laravel-auditing`等)は入れず、自前実装で依存を減らす(軽量構成の方針に合わせる)。
+**記録方法**: Eloquentの [Observer](https://laravel.com/docs/eloquent#observers) で `created` / `updated` / `deleted` イベントを捕捉し、差分を計算して `AuditLog` に書き込む。サードパーティの監査ログパッケージ(`laravel-auditing`等)は入れず、自前実装で依存を減らす(軽量構成の方針に合わせる)。
+
+差分計算ロジック(`snapshot`/`diff`/`record`)は `App\Observers\Concerns\RecordsAuditLog` トレイトに共通化しており、`TaskObserver` と `AssigneeObserver`(Issue #5)の両方がこれを使う。対象モデルは `static::auditableFields(): array` で追跡対象カラムを公開する(`Task::auditableFields()` は `Task::fields()` のキー、`Assignee::auditableFields()` は `['name']`)。
 
 ## 4. 機能設計
 
@@ -77,7 +87,7 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 
 ### 4.3 検索/フィルタ
 
-- 一覧上部に検索ボックス。`hx-get="/tasks"` + `hx-trigger="keyup changed delay:300ms"` でデバウンスしつつ `title` / `assignee` / `notes` を `LIKE` 検索。
+- 一覧上部に検索ボックス。`hx-get="/tasks"` + `hx-trigger="input changed delay:300ms, search"` でデバウンスしつつ `title` / `notes` を `LIKE` 検索、担当者は `assignees.name` に対して `whereHas` で検索。
 - 結果は `<tbody>` 部分だけを差し替え(ページ全体はリロードしない)。
 - クエリパラメータ `q` をURLに保持し、リロードしても検索状態を維持する。
 
@@ -94,6 +104,10 @@ Next.js + Prisma は検討したが、SPAビルドの重さに対して今回の
 | POST | `/tasks` | 新規作成 |
 | PATCH | `/tasks/{task}/cells/{field}` | セル単位の更新(表示⇔編集の切り替え自体はAlpine.jsのみで行うため、編集フォーム取得用のGETは不要) |
 | DELETE | `/tasks/{task}` | 削除 |
+| GET | `/assignees` | 担当者一覧(Issue #5) |
+| POST | `/assignees` | 担当者追加 |
+| PATCH | `/assignees/{assignee}` | 担当者名の変更(インライン編集) |
+| DELETE | `/assignees/{assignee}` | 担当者削除(紐づくタスクは `assignee_id` が `NULL` になる) |
 | GET | `/audit-logs` | 操作ログ一覧 |
 
 ## 6. 画面構成(ファイル)
@@ -105,13 +119,14 @@ resources/views/
   tasks/partials/_rows.blade.php  # <tbody>内側(検索結果の差し替えに使用)
   tasks/partials/_row.blade.php   # 1行分(初期表示・htmx差し替え共用)
   tasks/partials/_cell.blade.php  # 1セル分。表示/編集の両方をAlpine.jsのx-showで切り替え
+  assignees/index.blade.php       # 担当者一覧ページ(Issue #5)
+  assignees/partials/*.blade.php  # tasksのパターンを踏襲した行・セルのパーシャル
   audit-logs/index.blade.php
 ```
 
 ## 7. スコープ外(今回やらないこと)
 
 - 認証・認可(ユーザー登録・ログイン・ロール)
-- 複数テーブル・リレーション
 - ページネーション(行数が増えたら別途検討)
 - 列の追加・削除などスキーマそのものをUIから変更する機能(スプシにある「列追加」はMVPでは対象外)
 
