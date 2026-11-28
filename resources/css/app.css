@@ -12,7 +12,11 @@
     display: none !important;
 }
 
-.grid-cell {
+/* Only suppress native text selection while actively drag-selecting a range
+   (resources/js/grid-selection.js toggles this class on the table), so a
+   single cell's text can still be selected/copied normally the rest of the
+   time. */
+.grid-dragging .grid-cell {
     user-select: none;
 }
 

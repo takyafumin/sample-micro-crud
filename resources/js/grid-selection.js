@@ -7,23 +7,30 @@
  *   in _cell.blade.php) as long as the mouse doesn't move between cells.
  * - Drag, or Shift+click, selects a rectangular range instead and suppresses
  *   that click's "open for editing" behavior.
- * - Ctrl/Cmd+C copies the selected range's displayed values as TSV.
+ * - Ctrl/Cmd+C copies the selected range's displayed values as TSV, unless
+ *   the browser already has a native text selection (then that's copied
+ *   instead, as the user would expect anywhere else on the page).
  * - Ctrl/Cmd+V pastes TSV from the clipboard starting at the selection's
  *   top-left cell, clipped to the rows/columns currently on screen (it never
  *   creates new rows), by PATCHing each affected cell through the existing
  *   per-cell endpoint and swapping in the server's response — the same
  *   validation and audit logging as a normal single-cell edit applies.
+ * - The selection is dropped whenever htmx swaps anything inside the table
+ *   (search, add, delete), since row/column positions are plain DOM indices
+ *   and would otherwise silently point at different tasks after a swap.
  */
 export function setupGridSelection() {
     const table = document.querySelector('table[data-grid]');
-    if (!table) {
+    if (!table || table.dataset.gridSelectionReady) {
         return;
     }
+    table.dataset.gridSelectionReady = 'true';
 
     let anchorCell = null;
     let isSelecting = false;
     let dragMoved = false;
     let currentRange = null;
+    let pasteInFlight = false;
 
     const getRows = () => [...table.querySelectorAll('tbody > tr[data-row-id]')];
     const getCells = (row) => [...row.querySelectorAll('td[data-field]')];
@@ -37,14 +44,31 @@ export function setupGridSelection() {
         return rowIndex === -1 || colIndex === -1 ? null : { rowIndex, colIndex };
     }
 
-    function clearHighlight() {
+    function clearSelection() {
+        anchorCell = null;
+        currentRange = null;
         table.querySelectorAll('.grid-cell-selected').forEach((el) => el.classList.remove('grid-cell-selected'));
     }
 
-    function highlightRange(a, b) {
-        clearHighlight();
-
+    /** Runs callback(td, rowIndex, colIndex) for every cell in range that still exists. */
+    function forEachCellInRange(range, callback) {
         const rows = getRows();
+        for (let r = range.rowStart; r <= range.rowEnd; r++) {
+            const cells = getCells(rows[r]);
+            if (!cells.length) {
+                continue;
+            }
+            for (let c = range.colStart; c <= range.colEnd; c++) {
+                if (cells[c]) {
+                    callback(cells[c], r, c);
+                }
+            }
+        }
+    }
+
+    function highlightRange(a, b) {
+        table.querySelectorAll('.grid-cell-selected').forEach((el) => el.classList.remove('grid-cell-selected'));
+
         const range = {
             rowStart: Math.min(a.rowIndex, b.rowIndex),
             rowEnd: Math.max(a.rowIndex, b.rowIndex),
@@ -52,15 +76,27 @@ export function setupGridSelection() {
             colEnd: Math.max(a.colIndex, b.colIndex),
         };
 
-        for (let r = range.rowStart; r <= range.rowEnd; r++) {
-            const cells = getCells(rows[r]);
-            for (let c = range.colStart; c <= range.colEnd; c++) {
-                cells[c]?.classList.add('grid-cell-selected');
-            }
-        }
+        forEachCellInRange(range, (td) => td.classList.add('grid-cell-selected'));
 
         return range;
     }
+
+    // A search (swaps #task-rows) or a delete (swaps a <tr>) can shift,
+    // remove, or reorder rows; row/col positions are plain indices, so a
+    // selection made before either swap could silently point at different
+    // tasks after it. An ordinary single-cell edit (swaps just that <td>'s
+    // innerHTML) doesn't change row order/count, so it's deliberately left
+    // alone — otherwise editing one cell would clear the whole selection.
+    // Listening "before" (while the target is still attached and so still
+    // bubbles up to here) rather than "after" matters for delete: its
+    // outerHTML-to-empty swap detaches the target, and a detached element's
+    // afterSwap event would never reach this document-level listener.
+    document.body.addEventListener('htmx:beforeSwap', (event) => {
+        const target = event.detail.target;
+        if (table.contains(target) && (target.id === 'task-rows' || target.tagName === 'TR')) {
+            clearSelection();
+        }
+    });
 
     table.addEventListener('mousedown', (event) => {
         const td = event.target.closest('td[data-field]');
@@ -75,6 +111,7 @@ export function setupGridSelection() {
 
         if (event.shiftKey && anchorCell) {
             currentRange = highlightRange(anchorCell, pos);
+            dragMoved = true; // suppress this click's own edit-open too
             event.preventDefault();
             return;
         }
@@ -82,6 +119,7 @@ export function setupGridSelection() {
         anchorCell = pos;
         isSelecting = true;
         dragMoved = false;
+        table.classList.add('grid-dragging');
         currentRange = highlightRange(pos, pos);
     });
 
@@ -96,7 +134,7 @@ export function setupGridSelection() {
         }
 
         const pos = cellPosition(td);
-        if (!pos) {
+        if (!pos || (pos.rowIndex === currentRange?.lastRow && pos.colIndex === currentRange?.lastCol)) {
             return;
         }
 
@@ -105,20 +143,30 @@ export function setupGridSelection() {
         }
 
         currentRange = highlightRange(anchorCell, pos);
+        currentRange.lastRow = pos.rowIndex;
+        currentRange.lastCol = pos.colIndex;
     });
 
     document.addEventListener('mouseup', () => {
         isSelecting = false;
+        table.classList.remove('grid-dragging');
+        // Deferred: if the drag ended outside this table, no click event
+        // will ever reach the capture handler below to clear this flag.
+        setTimeout(() => {
+            dragMoved = false;
+        }, 0);
     });
 
     // Capture phase, so this runs before Alpine's own bubbling @click handler
-    // that would otherwise open the cell the drag ended on for editing.
+    // that would otherwise open the cell the drag/shift-click ended on for
+    // editing. Only grid cells are suppressed, so the row's delete/log
+    // controls never get silently swallowed by a drag that ended over them.
     table.addEventListener('click', (event) => {
-        if (dragMoved) {
+        if (dragMoved && event.target.closest('td[data-field]')) {
             event.stopPropagation();
             event.preventDefault();
-            dragMoved = false;
         }
+        dragMoved = false;
     }, true);
 
     document.addEventListener('keydown', (event) => {
@@ -135,6 +183,10 @@ export function setupGridSelection() {
         }
 
         if (event.key === 'c' || event.key === 'C') {
+            // Don't hijack an ordinary text selection made elsewhere on the page.
+            if (window.getSelection()?.toString()) {
+                return;
+            }
             copySelection(currentRange);
         } else if (event.key === 'v' || event.key === 'V') {
             event.preventDefault();
@@ -144,22 +196,32 @@ export function setupGridSelection() {
 
     function cellDisplayText(td) {
         const span = td.querySelector('span');
-        // A real newline inside a cell (e.g. multi-line notes) would corrupt
-        // the TSV row/column structure, so flatten it to a space.
-        return (span?.innerText ?? '').replace(/\r?\n/g, ' ').trim();
+        // textContent (not innerText) so a cell currently open for editing —
+        // whose display <span> is hidden via x-show — still copies its last
+        // committed value instead of "" (innerText is "" for display:none).
+        const text = span?.textContent ?? '';
+        // Flatten real newlines/runs of whitespace (e.g. multi-line notes, or
+        // Blade's own template whitespace) so they can't corrupt the TSV grid.
+        return text.replace(/\s+/g, ' ').trim();
     }
 
     async function copySelection(range) {
-        const rows = getRows();
         const lines = [];
+        let row = -1;
+        let line = [];
 
-        for (let r = range.rowStart; r <= range.rowEnd; r++) {
-            const cells = getCells(rows[r]);
-            const values = [];
-            for (let c = range.colStart; c <= range.colEnd; c++) {
-                values.push(cellDisplayText(cells[c]));
+        forEachCellInRange(range, (td, r) => {
+            if (r !== row) {
+                if (row !== -1) {
+                    lines.push(line.join('\t'));
+                }
+                row = r;
+                line = [];
             }
-            lines.push(values.join('\t'));
+            line.push(cellDisplayText(td));
+        });
+        if (line.length) {
+            lines.push(line.join('\t'));
         }
 
         try {
@@ -171,12 +233,14 @@ export function setupGridSelection() {
     }
 
     function resolveAssigneeId(td, name) {
-        if (name === '') {
+        if (name.trim() === '') {
             return '';
         }
 
         // The <select> for this cell is always rendered (just hidden while
         // not editing), so its options are the live list of assignee names.
+        // Names are enforced unique (Assignee::validationRuleFor), so an
+        // exact text match always identifies the one intended assignee.
         const select = td.querySelector('select[name="value"]');
         if (!select) {
             return name;
@@ -184,13 +248,18 @@ export function setupGridSelection() {
 
         const match = [...select.options].find((option) => option.textContent.trim() === name.trim());
 
-        // Fall back to the raw pasted text if there's no matching assignee;
-        // the server's exists:assignees,id rule will reject it with a normal
-        // validation error shown on that cell, same as any other bad paste.
+        // Fall back to the raw pasted text if there's no matching assignee
+        // (e.g. renamed/deleted since the page loaded); the server's
+        // exists:assignees,id rule will reject it with a normal validation
+        // error shown on that cell, same as any other bad paste.
         return match ? match.value : name;
     }
 
     async function pasteSelection(range) {
+        if (pasteInFlight) {
+            return;
+        }
+
         let text;
         try {
             text = await navigator.clipboard.readText();
@@ -198,6 +267,15 @@ export function setupGridSelection() {
             return;
         }
 
+        pasteInFlight = true;
+        try {
+            await applyPaste(range, text);
+        } finally {
+            pasteInFlight = false;
+        }
+    }
+
+    async function applyPaste(range, text) {
         const pasteRows = text.replace(/\r/g, '').split('\n');
         if (pasteRows.length > 1 && pasteRows[pasteRows.length - 1] === '') {
             pasteRows.pop();
@@ -210,6 +288,7 @@ export function setupGridSelection() {
 
         const columnFields = getCells(rows[0]).map((td) => td.dataset.field);
         const token = document.querySelector('meta[name="csrf-token"]')?.content;
+        let transportFailures = 0;
 
         for (let r = 0; r < pasteRows.length; r++) {
             const rowIndex = range.rowStart + r;
@@ -231,20 +310,32 @@ export function setupGridSelection() {
                 const rowId = rows[rowIndex].dataset.rowId;
                 const value = field === 'assignee_id' ? resolveAssigneeId(td, pasteCols[c]) : pasteCols[c];
 
-                const response = await fetch(`/tasks/${rowId}/cells/${field}`, {
-                    method: 'PATCH',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRF-TOKEN': token ?? '',
-                        'X-Requested-With': 'XMLHttpRequest',
-                    },
-                    body: `value=${encodeURIComponent(value)}`,
-                });
+                let response;
+                try {
+                    response = await fetch(`/tasks/${rowId}/cells/${field}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRF-TOKEN': token ?? '',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: `value=${encodeURIComponent(value)}`,
+                    });
+                } catch {
+                    transportFailures++;
+                    continue;
+                }
 
                 if (response.ok) {
                     td.innerHTML = await response.text();
+                } else {
+                    transportFailures++;
                 }
             }
+        }
+
+        if (transportFailures > 0) {
+            window.alert(`貼り付けに失敗したセルが${transportFailures}件あります(通信エラー)。ページを再読み込みして再度お試しください。`);
         }
     }
 }
