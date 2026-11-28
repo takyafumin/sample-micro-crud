@@ -1,3 +1,5 @@
+import { formatTsv, parseTsv } from './tsv';
+
 /**
  * Spreadsheet-style rectangular range selection + copy/paste for any <table
  * data-grid> whose body rows carry [data-row-id] and whose editable cells
@@ -20,14 +22,22 @@
  * - Enter opens the active cell for editing with its field focused; Escape
  *   cancels an open edit (restores the original value and closes it).
  * - Only one cell is in edit mode at a time: opening a cell closes the others.
- * - Ctrl/Cmd+C copies the selected range's displayed values as TSV, unless
- *   the browser already has a native text selection (then that's copied
- *   instead, as the user would expect anywhere else on the page).
- * - Ctrl/Cmd+V pastes TSV from the clipboard starting at the selection's
- *   top-left cell, clipped to the rows/columns currently on screen (it never
- *   creates new rows), by PATCHing each affected cell through the existing
- *   per-cell endpoint and swapping in the server's response — the same
- *   validation and audit logging as a normal single-cell edit applies.
+ * - Enter/Shift+Enter in a one-line text editor, and Tab/Shift+Tab in any
+ *   editor (or on the grid), commit and move down/up/right/left. F2 opens
+ *   the active cell with the caret at the end; typing on a text cell starts
+ *   editing it, replacing the old value (not with an IME: use Enter/F2).
+ *   Ctrl/Cmd+A selects every cell.
+ * - Ctrl/Cmd+C / X / V copy, cut and paste the range as TSV, compatible
+ *   with Google Sheets and Excel (see tsv.js); a single value or a block
+ *   the selection is a multiple of fills the whole selection, and a paste
+ *   is cut off at the table's edge (it never creates rows). Pasting a cut
+ *   range moves it. Delete/Backspace clears the range (title and status,
+ *   which can't be empty, are left as they are). All of these go
+ *   through PATCH /tasks/cells, so the same validation and audit logging as
+ *   a single-cell edit applies; rejected cells are reported in a toast.
+ * - Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z and Ctrl+Y redo, the last edit,
+ *   paste, clear or cut — writing the previous values back to the server.
+ *   Inside a focused text field these keys keep their native behavior.
  * - The selection is dropped whenever htmx swaps anything inside the table
  *   (search, add, delete), since row/column positions are plain DOM indices
  *   and would otherwise silently point at different tasks after a swap.
@@ -50,7 +60,9 @@ export function setupGridSelection() {
     // Arrow keys belong to the grid only while the user is "in" it; after a
     // click or focus elsewhere they go back to scrolling the page as usual.
     let keyboardActive = false;
-    let pasteInFlight = false;
+    // Set by Enter in a cell editor (which commits and moves down) so the
+    // Enter keyup handler doesn't immediately open the cell moved to.
+    let suppressEnterKeyup = false;
 
     const getRows = () => [...table.querySelectorAll('tbody > tr[data-row-id]')];
     const getCells = (row) => [...row.querySelectorAll('td[data-field]')];
@@ -325,9 +337,10 @@ export function setupGridSelection() {
      * Opens td's editor (if it isn't already) and focuses its field: with the
      * whole value selected (Enter, so typing replaces it as in a spreadsheet)
      * or with the caret at the end (a mouse click, so a stray keystroke can't
-     * wipe a long value). Every other open editor is closed first.
+     * wipe a long value). With replace, a text field starts out empty, for
+     * typing over the old value. Every other open editor is closed first.
      */
-    function openCellEditor(td, { selectAll }) {
+    function openCellEditor(td, { selectAll, replace = false }) {
         const root = td.querySelector('[x-data]');
         const field = td.querySelector('[name="value"]');
         if (!root || !field || !window.Alpine) {
@@ -372,6 +385,9 @@ export function setupGridSelection() {
                 }
                 return;
             }
+            if (replace && (field.tagName === 'TEXTAREA' || field.type === 'text')) {
+                field.value = '';
+            }
             field.focus();
             // Only text controls have a caret (setSelectionRange throws on date).
             if (field.tagName === 'TEXTAREA' || field.type === 'text') {
@@ -390,7 +406,19 @@ export function setupGridSelection() {
     // field after the key is released, so the field's own
     // hx-trigger="keyup[key=='Enter']" never sees this keystroke and doesn't
     // immediately commit the value it was just opened with.
+    window.addEventListener('blur', () => {
+        suppressEnterKeyup = false;
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') {
+            suppressEnterKeyup = false;
+        }
+    }, true);
     document.addEventListener('keyup', (event) => {
+        if (event.key === 'Enter' && suppressEnterKeyup) {
+            suppressEnterKeyup = false;
+            return;
+        }
         if (event.key !== 'Enter' || !anchorCell || !keyboardActive || event.isComposing
             || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isTypingInField()) {
             return;
@@ -429,184 +457,577 @@ export function setupGridSelection() {
         }
     });
 
+
+    // ------------------------------------------------------------------
+    // Spreadsheet-style keys around a cell editor: Enter / Shift+Enter in a
+    // one-line text editor and Tab / Shift+Tab in any editor commit the edit
+    // and move the active cell down / up / right / left.
+    // ------------------------------------------------------------------
+
+    // Cells left by Enter/Tab whose save is in flight: if the server rejects
+    // the value, the active cell goes back there with the editor focused, so
+    // the error isn't silently dismissed by the next key press.
+    const returnOnError = new WeakSet();
+
+    function focusedCellEditor() {
+        const active = document.activeElement;
+        return active?.name === 'value' && active.closest('td[data-field]') && table.contains(active)
+            && active.getClientRects().length > 0 ? active : null;
+    }
+
+    /** Moves the active cell by (dRow, dCol), collapsing the selection to it. */
+    function moveActiveCell(dRow, dCol) {
+        const rows = getRows();
+        const colCount = rows.length ? getCells(rows[0]).length : 0;
+        if (!anchorCell || rows.length === 0 || colCount === 0) {
+            return;
+        }
+        const clamp = (value, max) => Math.min(Math.max(value, 0), max);
+        const next = {
+            rowIndex: clamp(anchorCell.rowIndex + dRow, rows.length - 1),
+            colIndex: clamp(anchorCell.colIndex + dCol, colCount - 1),
+        };
+        anchorCell = next;
+        currentRange = highlightRange(next, next);
+        cellAt(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+
     document.addEventListener('keydown', (event) => {
-        const metaOrCtrl = event.metaKey || event.ctrlKey;
-        if (!metaOrCtrl || !currentRange) {
+        const field = focusedCellEditor();
+        if (!field || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) {
             return;
         }
 
-        if (isTypingInField()) {
-            // A cell is actively being edited: let the browser's native
-            // copy/paste work on that field instead of the grid-level one.
+        const isTextInput = field.tagName === 'INPUT' && field.type === 'text';
+        let delta = null;
+        if (event.key === 'Enter' && isTextInput) {
+            delta = event.shiftKey ? [-1, 0] : [1, 0];
+            suppressEnterKeyup = true;
+        } else if (event.key === 'Tab') {
+            delta = event.shiftKey ? [0, -1] : [0, 1];
+        }
+        if (!delta) {
             return;
         }
 
-        if (event.key === 'c' || event.key === 'C') {
-            // Don't hijack an ordinary text selection made elsewhere on the page.
-            if (window.getSelection()?.toString()) {
-                return;
+        event.preventDefault();
+        const td = field.closest('td[data-field]');
+        const pos = cellPosition(td);
+        if (pos) {
+            anchorCell = pos;
+        }
+        keyboardActive = true;
+        // Blurring commits a changed value (change -> PATCH, which marks the
+        // field htmx-request so closeOtherEditors leaves it to the response);
+        // an unchanged editor is simply closed.
+        field.blur();
+        if (field.classList.contains('htmx-request')) {
+            returnOnError.add(td);
+        }
+        closeOtherEditors();
+        moveActiveCell(delta[0], delta[1]);
+    });
+
+    // ------------------------------------------------------------------
+    // Undo / redo history. One entry per user operation (a single-cell edit,
+    // a paste, a clear, a cut's paste), each a list of {id, field, before,
+    // after} with the raw values the server stored, so undo/redo just write
+    // them back through the batch endpoint.
+    // ------------------------------------------------------------------
+
+    const HISTORY_LIMIT = 100;
+    const undoStack = [];
+    const redoStack = [];
+
+    function pushHistory(changes) {
+        const effective = changes.filter((change) => change.before !== change.after);
+        if (effective.length === 0) {
+            return;
+        }
+        undoStack.push(effective);
+        if (undoStack.length > HISTORY_LIMIT) {
+            undoStack.shift();
+        }
+        redoStack.length = 0;
+    }
+
+    const cellKey = (id, field) => `${id}\u0000${field}`;
+
+    function tdFor(id, field) {
+        return table.querySelector(`tr[data-row-id="${CSS.escape(String(id))}"] > td[data-field="${CSS.escape(field)}"]`);
+    }
+
+    function storedRaw(td) {
+        return td?.querySelector('[data-raw]')?.dataset.raw;
+    }
+
+    // Record ordinary single-cell edits (the htmx PATCH from a cell editor).
+    // Single-cell saves still in flight. Batch operations and undo/redo
+    // wait for them, so e.g. Ctrl+Z right after Enter undoes that edit
+    // (whose history entry only exists once its response arrives) rather
+    // than the one before it, and a paste can't race a pending save.
+    let cellSavesInFlight = 0;
+    let cellSavesIdle = null; // { promise, resolve } while saves are in flight
+    const waitForCellSaves = () => cellSavesIdle?.promise ?? Promise.resolve();
+
+    document.body.addEventListener('htmx:beforeRequest', (event) => {
+        const td = event.detail.elt?.closest?.('td[data-field]');
+        if (td && table.contains(td) && event.detail.elt.name === 'value') {
+            td.dataset.rawBeforeEdit = storedRaw(td) ?? '';
+            if (cellSavesInFlight++ === 0) {
+                let resolve;
+                const promise = new Promise((r) => { resolve = r; });
+                cellSavesIdle = { promise, resolve };
             }
-            copySelection(currentRange);
-        } else if (event.key === 'v' || event.key === 'V') {
-            event.preventDefault();
-            pasteSelection(currentRange);
+            // Counted down on the XHR itself: htmx's afterRequest fires on
+            // the field, which the swap has already detached by then, so it
+            // never bubbles up to here. loadend comes after htmx's onload
+            // (which swaps); the delay covers the settle step that follows,
+            // so the history entry is pushed before waiting operations resume.
+            event.detail.xhr?.addEventListener('loadend', () => {
+                setTimeout(() => {
+                    if (--cellSavesInFlight === 0) {
+                        cellSavesIdle?.resolve();
+                        cellSavesIdle = null;
+                    }
+                }, 50);
+            });
+        }
+    });
+    document.body.addEventListener('htmx:afterSwap', (event) => {
+        const td = event.detail.target;
+        if (!td?.matches?.('td[data-field]') || !table.contains(td)) {
+            return;
+        }
+
+        const before = td.dataset.rawBeforeEdit;
+        delete td.dataset.rawBeforeEdit;
+        const after = storedRaw(td);
+        const id = td.closest('tr')?.dataset.rowId;
+        if (before !== undefined && after !== undefined && id) {
+            pushHistory([{ id, field: td.dataset.field, before, after }]);
+        }
+
+    });
+    // Settle (not swap): only then has Alpine initialized the swapped-in
+    // cell, which openCellEditor needs.
+    document.body.addEventListener('htmx:afterSettle', (event) => {
+        const td = event.detail.target;
+        if (!td?.matches?.('td[data-field]') || !table.contains(td)) {
+            return;
+        }
+        const rejected = td.querySelector('[data-error]');
+        if (returnOnError.has(td)) {
+            returnOnError.delete(td);
+            const pos = cellPosition(td);
+            if (rejected && pos && !focusedCellEditor()) {
+                anchorCell = pos;
+                currentRange = highlightRange(pos, pos);
+                openCellEditor(td, { selectAll: false });
+            }
         }
     });
 
-    function cellDisplayText(td) {
-        const span = td.querySelector('span');
-        // textContent (not innerText) so a cell currently open for editing —
-        // whose display <span> is hidden via x-show — still copies its last
-        // committed value instead of "" (innerText is "" for display:none).
-        const text = span?.textContent ?? '';
-        // Flatten real newlines/runs of whitespace (e.g. multi-line notes, or
-        // Blade's own template whitespace) so they can't corrupt the TSV grid.
-        return text.replace(/\s+/g, ' ').trim();
+    // ------------------------------------------------------------------
+    // Batch updates (paste / clear / cut / undo / redo) go through
+    // PATCH /tasks/cells one at a time, in order, so e.g. pressing Ctrl+Z
+    // twice quickly undoes two operations instead of racing.
+    // ------------------------------------------------------------------
+
+    let queue = Promise.resolve();
+    const enqueue = (task) => {
+        const run = async () => {
+            await waitForCellSaves();
+            return task();
+        };
+        queue = queue.then(run, run);
+        return queue;
+    };
+
+    /**
+     * Sends changes ([{id, field, value, text?}], last one wins per cell),
+     * swaps the re-rendered cells in and reports rejected ones. Returns the
+     * applied changes as history items ({id, field, before, after}).
+     */
+    async function sendChanges(changes) {
+        const byCell = new Map();
+        changes.forEach((change) => byCell.set(cellKey(change.id, change.field), change));
+        const unique = [...byCell.values()];
+        if (unique.length === 0) {
+            return [];
+        }
+
+        let data;
+        try {
+            const response = await fetch('/tasks/cells', {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ changes: unique }),
+            });
+            if (response.status === 422) {
+                showToast('一度に変更できるセル数(5000)を超えているか、内容が不正なため保存できませんでした。');
+                return [];
+            }
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            data = await response.json();
+        } catch {
+            showToast('保存に失敗しました(通信エラー)。ページを再読み込みして再度お試しください。');
+            return [];
+        }
+
+        const applied = [];
+        const errors = new Map();
+        for (const result of data.results ?? []) {
+            if (!result.ok) {
+                errors.set(result.error, (errors.get(result.error) ?? 0) + 1);
+                continue;
+            }
+            applied.push({ id: String(result.id), field: result.field, before: result.before, after: result.after });
+            const td = tdFor(result.id, result.field);
+            if (td) {
+                td.innerHTML = result.html;
+                window.htmx?.process(td);
+            }
+        }
+
+        if (errors.size > 0) {
+            const total = [...errors.values()].reduce((a, b) => a + b, 0);
+            const reasons = [...errors.entries()].map(([message, count]) => `${message}(${count}件)`).join(' / ');
+            showToast(`${total}件のセルは変更できませんでした: ${reasons}`);
+        }
+
+        return applied;
     }
 
-    async function copySelection(range) {
-        const lines = [];
-        let row = -1;
-        let line = [];
+    /** Selects the bounding box of the given cells that are on screen. */
+    function selectCells(items) {
+        const positions = items
+            .map((item) => tdFor(item.id, item.field))
+            .filter(Boolean)
+            .map(cellPosition)
+            .filter(Boolean);
+        if (positions.length === 0) {
+            return;
+        }
+        const topLeft = {
+            rowIndex: Math.min(...positions.map((p) => p.rowIndex)),
+            colIndex: Math.min(...positions.map((p) => p.colIndex)),
+        };
+        const bottomRight = {
+            rowIndex: Math.max(...positions.map((p) => p.rowIndex)),
+            colIndex: Math.max(...positions.map((p) => p.colIndex)),
+        };
+        anchorCell = topLeft;
+        currentRange = highlightRange(topLeft, bottomRight);
+        cellAt(topLeft)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
 
-        forEachCellInRange(range, (td, r) => {
-            if (r !== row) {
-                if (row !== -1) {
-                    lines.push(line.join('\t'));
-                }
-                row = r;
-                line = [];
+    function undoOrRedo(fromStack, toStack, side) {
+        enqueue(async () => {
+            const entry = fromStack.pop();
+            if (!entry) {
+                return;
             }
-            line.push(cellDisplayText(td));
+            const applied = await sendChanges(entry.map((item) => ({ id: item.id, field: item.field, value: side === 'before' ? item.before : item.after })));
+            if (applied.length > 0) {
+                // Keep only what was actually written back (a deleted row can't be).
+                const done = new Set(applied.map((item) => cellKey(item.id, item.field)));
+                toStack.push(entry.filter((item) => done.has(cellKey(item.id, item.field))));
+                selectCells(entry);
+            } else {
+                // Nothing could be restored (e.g. offline): keep the entry.
+                fromStack.push(entry);
+            }
         });
-        if (line.length) {
-            lines.push(line.join('\t'));
-        }
-
-        try {
-            await navigator.clipboard.writeText(lines.join('\n'));
-        } catch {
-            // Clipboard access can be denied (permissions, insecure context);
-            // there's nothing useful to do but leave the selection as-is.
-        }
     }
 
-    function resolveAssigneeId(td, name) {
-        if (name.trim() === '') {
-            return '';
-        }
+    // ------------------------------------------------------------------
+    // Clipboard: copy / cut / paste as TSV, compatible with Google Sheets
+    // and Excel. The native copy/cut/paste events are used so no clipboard
+    // permission is needed; if a browser doesn't fire them while no text
+    // field is focused, the keydown handler falls back to the Clipboard API.
+    // ------------------------------------------------------------------
 
-        // The <select> for this cell is always rendered (just hidden while
-        // not editing), so its options are the live list of assignee names.
-        // Names are enforced unique (Assignee::validationRuleFor), so an
-        // exact text match always identifies the one intended assignee.
-        const select = td.querySelector('select[name="value"]');
-        if (!select) {
-            return name;
-        }
+    // The range most recently cut: its cells are cleared when that same
+    // text is pasted back into the grid (as in a spreadsheet, cut + paste
+    // moves the values). Escape or a new copy cancels it.
+    let cutSource = null; // { cells: [{id, field}], text }
 
-        // Collapse whitespace the same way cellDisplayText() does when copying,
-        // so an assignee name containing runs of whitespace still round-trips
-        // (copy -> paste back unchanged) instead of failing to match here.
-        const normalize = (value) => value.replace(/\s+/g, ' ').trim();
-        const match = [...select.options].find((option) => normalize(option.textContent) === normalize(name));
-
-        // Fall back to the raw pasted text if there's no matching assignee
-        // (e.g. renamed/deleted since the page loaded); the server's
-        // exists:assignees,id rule will reject it with a normal validation
-        // error shown on that cell, same as any other bad paste.
-        return match ? match.value : name;
+    function setCutSource(value) {
+        table.querySelectorAll('.grid-cell-cut').forEach((el) => el.classList.remove('grid-cell-cut'));
+        cutSource = value;
+        cutSource?.cells.forEach((item) => tdFor(item.id, item.field)?.classList.add('grid-cell-cut'));
     }
 
-    async function pasteSelection(range) {
-        if (pasteInFlight) {
-            return;
-        }
-
-        let text;
-        try {
-            text = await navigator.clipboard.readText();
-        } catch {
-            return;
-        }
-
-        pasteInFlight = true;
-        try {
-            await applyPaste(range, text);
-        } finally {
-            pasteInFlight = false;
-        }
+    /** True when Ctrl/Cmd+C/X/V/Z, Delete, ... should act on the grid selection. */
+    function gridHasKeyboard() {
+        return keyboardActive && currentRange && anchorCell && !isTypingInField();
     }
 
-    async function applyPaste(range, text) {
-        const pasteRows = text.replace(/\r/g, '').split('\n');
-        if (pasteRows.length > 1 && pasteRows[pasteRows.length - 1] === '') {
-            pasteRows.pop();
-        }
+    function selectionTsv(range) {
+        const rows = [];
+        forEachCellInRange(range, (td, r) => {
+            const index = r - range.rowStart;
+            (rows[index] ??= []).push(td.querySelector('[data-text]')?.dataset.text ?? '');
+        });
+        return formatTsv(rows.filter(Boolean));
+    }
 
+    function rangeItems(range) {
+        const items = [];
+        forEachCellInRange(range, (td) => {
+            items.push({ id: td.closest('tr').dataset.rowId, field: td.dataset.field });
+        });
+        return items;
+    }
+
+    // Fields a spreadsheet-style clear leaves alone: they can't be empty
+    // (title, status), so clearing them would only ever be rejected.
+    const UNCLEARABLE_FIELDS = new Set(['title', 'status']);
+
+    function clearRange(range) {
+        const items = rangeItems(range).filter((item) => !UNCLEARABLE_FIELDS.has(item.field));
+        enqueue(async () => {
+            pushHistory(await sendChanges(items.map((item) => ({ ...item, value: '' }))));
+        });
+    }
+
+    function pasteText(text) {
+        const range = currentRange;
         const rows = getRows();
-        if (rows.length === 0) {
+        if (!range || rows.length === 0) {
+            return;
+        }
+        if (text === '') {
+            return;
+        }
+        const block = parseTsv(text);
+        const blockHeight = block.length;
+        const blockWidth = Math.max(...block.map((row) => row.length));
+        const selHeight = range.rowEnd - range.rowStart + 1;
+        const selWidth = range.colEnd - range.colStart + 1;
+        const colCount = getCells(rows[0]).length;
+
+        // As in Sheets/Excel: a selection that's an exact multiple of the
+        // copied block (including a single value into any range) is filled by
+        // repeating it; otherwise the block is pasted once from the top-left
+        // cell. Either way it's cut off at the table's last row/column.
+        const tile = selHeight % blockHeight === 0 && selWidth % blockWidth === 0;
+        const height = Math.min(tile ? selHeight : blockHeight, rows.length - range.rowStart);
+        const width = Math.min(tile ? selWidth : blockWidth, colCount - range.colStart);
+
+        const changes = [];
+        for (let r = 0; r < height; r++) {
+            const cells = getCells(rows[range.rowStart + r]);
+            for (let c = 0; c < width; c++) {
+                const td = cells[range.colStart + c];
+                if (td) {
+                    changes.push({
+                        id: rows[range.rowStart + r].dataset.rowId,
+                        field: td.dataset.field,
+                        value: block[r % blockHeight][c % blockWidth] ?? '',
+                        text: true,
+                    });
+                }
+            }
+        }
+        if (changes.length === 0) {
             return;
         }
 
-        const columnFields = getCells(rows[0]).map((td) => td.dataset.field);
-        const token = document.querySelector('meta[name="csrf-token"]')?.content;
-        let transportFailures = 0;
+        // Pasting what was cut moves it: clear the source cells that the
+        // paste doesn't overwrite, in the same request and undo step.
+        let clears = [];
+        const normalize = (value) => value.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+        if (cutSource && normalize(cutSource.text) === normalize(text)) {
+            const targets = new Set(changes.map((change) => cellKey(change.id, change.field)));
+            clears = cutSource.cells
+                .filter((item) => !targets.has(cellKey(item.id, item.field)) && !UNCLEARABLE_FIELDS.has(item.field))
+                .map((item) => ({ ...item, value: '' }));
+            setCutSource(null);
+        }
 
-        for (let r = 0; r < pasteRows.length; r++) {
-            const rowIndex = range.rowStart + r;
-            if (rowIndex >= rows.length) {
-                break;
-            }
+        const topLeft = { rowIndex: range.rowStart, colIndex: range.colStart };
+        anchorCell = topLeft;
+        currentRange = highlightRange(topLeft, { rowIndex: range.rowStart + height - 1, colIndex: range.colStart + width - 1 });
 
-            // The row could have been deleted (and htmx:beforeSwap already
-            // cleared the selection) by the time this iteration's turn comes
-            // up, since each cell's PATCH below is awaited one at a time.
-            // Stop rather than keep PATCHing a detached row's stale id.
-            if (!rows[rowIndex].isConnected) {
-                break;
-            }
+        enqueue(async () => {
+            pushHistory(await sendChanges([...clears, ...changes]));
+        });
+    }
 
-            const pasteCols = pasteRows[r].split('\t');
-            const cells = getCells(rows[rowIndex]);
+    // Set on a grid Ctrl/Cmd+C/X/V keydown; cleared by the matching native
+    // event. Still set shortly after means the browser didn't fire one.
+    let pendingClipboardKey = null;
 
-            for (let c = 0; c < pasteCols.length; c++) {
-                const colIndex = range.colStart + c;
-                if (colIndex >= columnFields.length) {
-                    break;
+    function handleCopyOrCut(clipboardData, isCut) {
+        const range = currentRange;
+        const text = selectionTsv(range);
+        const cells = isCut ? rangeItems(range) : null;
+        if (clipboardData) {
+            clipboardData.setData('text/plain', text);
+            setCutSource(isCut ? { cells, text } : null);
+            return;
+        }
+        if (!navigator.clipboard) {
+            showToast('このブラウザではクリップボードにコピーできませんでした。');
+            return;
+        }
+        navigator.clipboard.writeText(text).then(
+            () => setCutSource(isCut ? { cells, text } : null),
+            () => showToast('クリップボードへのコピーが許可されていません。ブラウザの設定を確認してください。'),
+        );
+    }
+
+    function onClipboardEvent(event) {
+        if (!gridHasKeyboard()) {
+            return;
+        }
+        if (event.type === 'copy' && window.getSelection()?.toString()) {
+            // An ordinary text selection on the page: copy that instead.
+            return;
+        }
+        pendingClipboardKey = null;
+        event.preventDefault();
+        if (event.type === 'paste') {
+            pasteText(event.clipboardData?.getData('text/plain') ?? '');
+        } else {
+            handleCopyOrCut(event.clipboardData, event.type === 'cut');
+        }
+    }
+    document.addEventListener('copy', onClipboardEvent);
+    document.addEventListener('cut', onClipboardEvent);
+    document.addEventListener('paste', onClipboardEvent);
+
+    // ------------------------------------------------------------------
+    // Grid-level keys (only while the grid has the keyboard, i.e. no visible
+    // text field is focused): clipboard, undo/redo, Delete, select all, F2,
+    // Tab, and typing to start an edit.
+    // ------------------------------------------------------------------
+
+    document.addEventListener('keydown', (event) => {
+        // defaultPrevented: already handled above (e.g. Tab in an editor has
+        // committed and moved; it must not move a second time here).
+        if (event.defaultPrevented || event.isComposing || !gridHasKeyboard()) {
+            return;
+        }
+        const metaOrCtrl = event.metaKey || event.ctrlKey;
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+
+        if (metaOrCtrl && !event.altKey) {
+            if (['c', 'x', 'v'].includes(key) && !event.shiftKey) {
+                if (key === 'c' && window.getSelection()?.toString()) {
+                    return;
                 }
-
-                const td = cells[colIndex];
-                const field = columnFields[colIndex];
-                const rowId = rows[rowIndex].dataset.rowId;
-                const value = field === 'assignee_id' ? resolveAssigneeId(td, pasteCols[c]) : pasteCols[c];
-
-                let response;
-                try {
-                    response = await fetch(`/tasks/${rowId}/cells/${field}`, {
-                        method: 'PATCH',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-CSRF-TOKEN': token ?? '',
-                            'X-Requested-With': 'XMLHttpRequest',
-                        },
-                        body: `value=${encodeURIComponent(value)}`,
-                    });
-                } catch {
-                    transportFailures++;
-                    continue;
-                }
-
-                if (response.ok) {
-                    td.innerHTML = await response.text();
+                pendingClipboardKey = key;
+                setTimeout(() => {
+                    if (pendingClipboardKey !== key) {
+                        return;
+                    }
+                    pendingClipboardKey = null;
+                    if (key === 'v') {
+                        navigator.clipboard?.readText().then(pasteText, () => {});
+                    } else {
+                        handleCopyOrCut(null, key === 'x');
+                    }
+                }, 50);
+                return;
+            }
+            if (key === 'z') {
+                event.preventDefault();
+                if (event.shiftKey) {
+                    undoOrRedo(redoStack, undoStack, 'after');
                 } else {
-                    transportFailures++;
+                    undoOrRedo(undoStack, redoStack, 'before');
                 }
+                return;
             }
+            if (key === 'y' && event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                event.preventDefault();
+                undoOrRedo(redoStack, undoStack, 'after');
+                return;
+            }
+            if (key === 'a' && !event.shiftKey) {
+                event.preventDefault();
+                const rows = getRows();
+                const colCount = rows.length ? getCells(rows[0]).length : 0;
+                if (colCount > 0) {
+                    anchorCell = { rowIndex: 0, colIndex: 0 };
+                    currentRange = highlightRange(anchorCell, { rowIndex: rows.length - 1, colIndex: colCount - 1 });
+                }
+                return;
+            }
+            return;
         }
 
-        if (transportFailures > 0) {
-            window.alert(`貼り付けに失敗したセルが${transportFailures}件あります(通信エラー)。ページを再読み込みして再度お試しください。`);
+        if (event.altKey || metaOrCtrl) {
+            return;
         }
+
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+            event.preventDefault();
+            clearRange(currentRange);
+        } else if (event.key === 'Escape') {
+            setCutSource(null);
+        } else if (event.key === 'Tab') {
+            const colCount = getCells(getRows()[0]).length;
+            const atEdge = event.shiftKey ? anchorCell.colIndex === 0 : anchorCell.colIndex === colCount - 1;
+            if (atEdge) {
+                // Let Tab move focus out of the grid as usual.
+                keyboardActive = false;
+                return;
+            }
+            event.preventDefault();
+            moveActiveCell(0, event.shiftKey ? -1 : 1);
+        } else if (event.key === 'F2') {
+            event.preventDefault();
+            const td = cellAt(anchorCell);
+            if (td) {
+                openCellEditor(td, { selectAll: false });
+            }
+        } else if ([...event.key].length === 1 && event.keyCode !== 229) {
+            // Typing on a text cell starts editing it with what's typed
+            // replacing the old value, as in a spreadsheet. Focus moves into
+            // the field during this keydown, so the browser inserts the
+            // character there. Not for an IME keystroke (key "Process" /
+            // keyCode 229): its composition has already begun outside the
+            // field and the first character would be lost or garbled, so
+            // with an IME press Enter or F2 first.
+            const td = cellAt(anchorCell);
+            const field = td?.querySelector('[name="value"]');
+            if (field && (field.tagName === 'TEXTAREA' || field.type === 'text')) {
+                currentRange = highlightRange(anchorCell, anchorCell);
+                openCellEditor(td, { selectAll: false, replace: true });
+            }
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // Toast for batch results (rejected cells, network errors).
+    // ------------------------------------------------------------------
+
+    let toastTimer = null;
+    function showToast(message) {
+        let toast = document.getElementById('grid-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'grid-toast';
+            toast.setAttribute('role', 'status');
+            toast.className = 'fixed bottom-4 left-1/2 z-50 max-w-[90vw] -translate-x-1/2 rounded bg-gray-900 px-4 py-2 text-sm text-white shadow-lg';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+            toast.hidden = true;
+        }, 6000);
     }
 }

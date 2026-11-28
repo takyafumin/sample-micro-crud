@@ -59,9 +59,67 @@ class Task extends Model
         'assignee_id' => 'integer',
     ];
 
+    /**
+     * Normalizes a submitted value before validation: textarea newlines
+     * arrive as CRLF but the grid's data-raw (an HTML attribute) holds LF,
+     * so store LF to keep undo from rewriting identical notes.
+     */
+    public static function normalizeInput(mixed $value): mixed
+    {
+        return is_string($value) ? str_replace(["\r\n", "\r"], "\n", $value) : $value;
+    }
+
     public static function validationRuleFor(string $field): string
     {
         return self::fields()[$field]['rule'] ?? throw new \InvalidArgumentException("Unknown field [{$field}]");
+    }
+
+    /**
+     * The stored value of $field as the string the cell editor submits
+     * (assignee id, Y-m-d date, ...). Used by the grid to record undo history.
+     */
+    public function rawCellValue(string $field): string
+    {
+        $value = $this->{$field};
+
+        return match (true) {
+            $value === null => '',
+            $value instanceof \DateTimeInterface => $value->format('Y-m-d'),
+            default => (string) $value,
+        };
+    }
+
+    /** The value of $field as shown in the grid (and copied to the clipboard). */
+    public function cellText(string $field): string
+    {
+        return $field === 'assignee_id'
+            ? (string) $this->assignee?->name
+            : $this->rawCellValue($field);
+    }
+
+    /**
+     * Converts text pasted from a spreadsheet into what the cell editor would
+     * submit for $field: an assignee name becomes its id, a status is
+     * upper-cased, and a "2026/11/30"-style date becomes "2026-11-30".
+     * Returns null for an empty cell, or false when the text can't be mapped
+     * (an unknown assignee name). Pass $assigneeIdsByName (name => id) to
+     * avoid a query per call when converting many cells.
+     */
+    public static function valueFromPastedText(string $field, string $text, ?array $assigneeIdsByName = null): string|false|null
+    {
+        $trimmed = trim(preg_replace('/\s+/u', ' ', $text));
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return match (self::fields()[$field]['type']) {
+            'assignee' => (string) (($assigneeIdsByName ?? Assignee::pluck('id', 'name')->all())[$trimmed] ?? '') ?: false,
+            'select' => strtoupper($trimmed),
+            'date' => preg_match('#^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$#', $trimmed, $m)
+                ? sprintf('%04d-%02d-%02d', $m[1], $m[2], $m[3])
+                : $trimmed,
+            default => $text,
+        };
     }
 
     public function assignee(): BelongsTo
