@@ -21,7 +21,7 @@
     </div>
 
     <div class="overflow-x-auto rounded border border-gray-200 bg-white">
-        <table class="w-full border-collapse text-sm">
+        <table class="w-full border-collapse text-sm" data-grid>
             <thead>
                 <tr class="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold text-gray-600">
                     <th class="px-2 py-2">タイトル</th>

@@ -1,6 +1,6 @@
-<tr id="task-{{ $task->id }}" class="border-b border-gray-200 last:border-0">
+<tr id="task-{{ $task->id }}" data-row-id="{{ $task->id }}" class="border-b border-gray-200 last:border-0">
     @foreach (array_keys(\App\Models\Task::fields()) as $field)
-        <td class="px-2 py-1 align-top">
+        <td class="grid-cell px-2 py-1 align-top" data-field="{{ $field }}">
             @include('tasks.partials._cell', ['task' => $task, 'field' => $field, 'editing' => false, 'value' => null, 'error' => null])
         </td>
     @endforeach

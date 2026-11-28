@@ -68,6 +68,14 @@
 - [x] Feature test追加(`AssigneeTest.php`、`TaskTest.php` に担当者関連ケース追加)
 - [x] ブラウザで動作確認(選択・検索・担当者の追加/改名/重複エラー/削除時のnull化)
 
+## 7. 複数セル範囲選択・コピー&ペースト (Issue #7)
+
+- [x] `tr`/`td` にグリッド用データ属性(`data-row-id`/`data-field`)を追加
+- [x] `resources/js/grid-selection.js`: ドラッグ/Shift+クリックでの矩形範囲選択 + ハイライトCSS
+- [x] Ctrl/Cmd+C でのTSVコピー
+- [x] Ctrl/Cmd+V でのTSVペースト(既存のセル単位PATCHを再利用、担当者は名前→ID解決)
+- [x] ブラウザで動作確認(ドラッグ選択・単一クリック編集の非破壊確認・コピー/ペースト・不正値のバリデーションエラー表示)
+
 ## 今回やらないこと(スコープ外・設計書参照)
 
 - 認証・認可
