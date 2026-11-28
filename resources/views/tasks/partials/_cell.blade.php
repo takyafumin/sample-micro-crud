@@ -13,6 +13,11 @@
         cancel() { this.$refs.field.value = this.original; this.editing = false; this.$refs.field.blur(); },
     }"
     x-init="original = $refs.field.value"
+    {{-- The stored (not the submitted-but-rejected) value, for the grid's
+         copy (data-text) and undo history (data-raw); see grid-selection.js. --}}
+    data-raw="{{ $task->rawCellValue($field) }}"
+    data-text="{{ $task->cellText($field) }}"
+    @if ($error) data-error @endif
     class="group relative"
 >
     <span

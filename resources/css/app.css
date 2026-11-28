@@ -32,3 +32,9 @@
     outline: 2px solid var(--color-blue-600);
     outline-offset: -2px;
 }
+
+/* A range cut with Ctrl/Cmd+X, waiting to be pasted (moved) elsewhere. */
+.grid-cell-cut {
+    outline: 2px dashed var(--color-blue-600);
+    outline-offset: -2px;
+}
