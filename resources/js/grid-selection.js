@@ -3,8 +3,8 @@
  * data-grid> whose body rows carry [data-row-id] and whose editable cells
  * carry [data-field] (see resources/views/tasks/partials/_row.blade.php).
  *
- * - Click still opens a single cell for editing (unchanged, handled by Alpine
- *   in _cell.blade.php) as long as the mouse doesn't move between cells.
+ * - A click anywhere in a cell (text or padding) opens it for editing with
+ *   the field focused, as long as the mouse doesn't move between cells.
  * - Drag, or Shift+click, selects a rectangular range instead and suppresses
  *   that click's "open for editing" behavior.
  * - Keyboard, as in a spreadsheet (only after the last click landed on a
@@ -13,9 +13,8 @@
  *   Shift+Arrow keeps the active cell (anchor) fixed and grows/shrinks the
  *   range's opposite corner one cell at a time; Ctrl/Cmd+Arrow and
  *   Ctrl/Cmd+Shift+Arrow do the same but jump straight to the table's edge.
- *   A cell editor left open by a click (it opens without taking focus) is
- *   closed as if Escape were pressed, so the highlight never moves away
- *   from a still-open editor.
+ *   A cell editor left open without focus is closed as if Escape were
+ *   pressed, so the highlight never moves away from a still-open editor.
  * - Enter opens the active cell for editing with its field focused; Escape
  *   cancels an open edit (restores the original value and closes it).
  * - Only one cell is in edit mode at a time: opening a cell closes the others.
@@ -285,27 +284,22 @@ export function setupGridSelection() {
         cellAt(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
 
-    // Enter on the active cell opens it for editing with the field focused,
-    // as in a spreadsheet. Listening on keyup (not keydown) matters: focus
-    // only moves into the field after the key is released, so the field's
-    // own hx-trigger="keyup[key=='Enter']" never sees this keystroke and
-    // doesn't immediately commit the value it was just opened with.
-    document.addEventListener('keyup', (event) => {
-        if (event.key !== 'Enter' || !anchorCell || !keyboardActive || event.isComposing
-            || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isTypingInField()) {
+    /**
+     * Opens td's editor (if it isn't already) and focuses its field: with the
+     * whole value selected (Enter, so typing replaces it as in a spreadsheet)
+     * or with the caret at the end (a mouse click, so a stray keystroke can't
+     * wipe a long value). Every other open editor is closed first.
+     */
+    function openCellEditor(td, { selectAll }) {
+        const root = td.querySelector('[x-data]');
+        const field = td.querySelector('[name="value"]');
+        if (!root || !field || !window.Alpine) {
             return;
         }
 
-        const td = cellAt(anchorCell);
-        const display = td?.querySelector('[x-data] > span');
-        const field = td?.querySelector('[name="value"]');
-        if (!display || !field) {
-            return;
-        }
+        closeOtherEditors(td);
+        window.Alpine.$data(root).editing = true;
 
-        // Goes through the same @click path as a mouse click (which also
-        // closes any other open editor via the click listener below).
-        display.click();
         // Alpine's x-show reveals the editor on a later animation frame, and a
         // display:none field can't take focus, so wait (briefly) until it's
         // visible. Give up if the cell was closed or swapped out meanwhile.
@@ -321,16 +315,39 @@ export function setupGridSelection() {
                 return;
             }
             field.focus();
-            if (typeof field.select === 'function' && field.type !== 'date') {
-                field.select();
+            // Only text controls have a caret (setSelectionRange throws on date).
+            if (field.tagName === 'TEXTAREA' || field.type === 'text') {
+                if (selectAll) {
+                    field.select();
+                } else {
+                    field.setSelectionRange(field.value.length, field.value.length);
+                }
             }
         };
         focusWhenVisible();
+    }
+
+    // Enter on the active cell opens it for editing, as in a spreadsheet.
+    // Listening on keyup (not keydown) matters: focus only moves into the
+    // field after the key is released, so the field's own
+    // hx-trigger="keyup[key=='Enter']" never sees this keystroke and doesn't
+    // immediately commit the value it was just opened with.
+    document.addEventListener('keyup', (event) => {
+        if (event.key !== 'Enter' || !anchorCell || !keyboardActive || event.isComposing
+            || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isTypingInField()) {
+            return;
+        }
+
+        const td = cellAt(anchorCell);
+        if (td) {
+            openCellEditor(td, { selectAll: true });
+        }
     });
 
     // Escape cancels the edit (restores the original value and closes) even
-    // when the editor was opened by a click and so never took focus. A
-    // focused editor handles Escape itself via x-on:keydown.escape.
+    // when the editor doesn't have focus (e.g. the user clicked elsewhere on
+    // the page). A focused editor handles Escape itself via
+    // x-on:keydown.escape.
     document.addEventListener('keydown', (event) => {
         // Ignore the synthetic Escapes closeOtherEditors() dispatches, which
         // bubble up to here too.
@@ -340,15 +357,16 @@ export function setupGridSelection() {
         closeOtherEditors();
     });
 
-    // Only one cell is in edit mode at a time: opening a cell (Alpine's own
-    // @click on its display span, which a drag/shift-click suppresses in the
-    // capture handler above) returns every other open cell to normal. A
-    // focused editor with typed changes has already blurred — and so
-    // committed them via hx-trigger="change" — by the time this click runs.
+    // A click anywhere in a cell — its display text or the padding around
+    // it — opens that cell for editing with the field focused. A drag or
+    // Shift+click never gets here: the capture handler above stops it. Only
+    // one cell is in edit mode at a time; a focused editor with typed changes
+    // has already blurred — and so committed them via hx-trigger="change" —
+    // by the time this click runs.
     table.addEventListener('click', (event) => {
         const td = event.target.closest('td[data-field]');
         if (td && !event.target.closest('input, textarea, select')) {
-            closeOtherEditors(td);
+            openCellEditor(td, { selectAll: false });
         }
     });
 
