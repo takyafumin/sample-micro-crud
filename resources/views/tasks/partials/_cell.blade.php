@@ -7,7 +7,11 @@
 @endphp
 
 <div
-    x-data="{ editing: {{ $editing ? 'true' : 'false' }}, original: null }"
+    x-data="{
+        editing: {{ $editing ? 'true' : 'false' }},
+        original: null,
+        cancel() { this.$refs.field.value = this.original; this.editing = false; this.$refs.field.blur(); },
+    }"
     x-init="original = $refs.field.value"
     class="group relative"
 >
@@ -43,7 +47,7 @@
     <div
         x-show="editing"
         x-cloak
-        x-on:keydown.escape="$refs.field.value = original; editing = false"
+        x-on:keydown.escape="!$event.isComposing && cancel()"
     >
         @switch($type)
             @case('select')
