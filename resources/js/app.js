@@ -1,5 +1,6 @@
 import htmx from 'htmx.org';
 import Alpine from 'alpinejs';
+import { setupGridSelection } from './grid-selection';
 
 window.htmx = htmx;
 window.Alpine = Alpine;
@@ -13,3 +14,4 @@ htmx.on('htmx:configRequest', (event) => {
 });
 
 Alpine.start();
+setupGridSelection();
