@@ -7,6 +7,16 @@
  *   in _cell.blade.php) as long as the mouse doesn't move between cells.
  * - Drag, or Shift+click, selects a rectangular range instead and suppresses
  *   that click's "open for editing" behavior.
+ * - Keyboard, as in a spreadsheet (only after the last click landed on a
+ *   grid cell, and never while the user is typing into a focused field):
+ *   Arrow moves the active cell and collapses the selection to it;
+ *   Shift+Arrow keeps the active cell (anchor) fixed and grows/shrinks the
+ *   range's opposite corner one cell at a time; Ctrl/Cmd+Arrow and
+ *   Ctrl/Cmd+Shift+Arrow do the same but jump straight to the table's edge.
+ *   A cell editor left open by a click (it opens without taking focus) is
+ *   closed as if Escape were pressed, so the highlight never moves away
+ *   from a still-open editor.
+ * - Only one cell is in edit mode at a time: opening a cell closes the others.
  * - Ctrl/Cmd+C copies the selected range's displayed values as TSV, unless
  *   the browser already has a native text selection (then that's copied
  *   instead, as the user would expect anywhere else on the page).
@@ -26,10 +36,17 @@ export function setupGridSelection() {
     }
     table.dataset.gridSelectionReady = 'true';
 
+    // anchorCell is the active cell (where the selection started, stays
+    // fixed while extending); focusCell is the range's opposite corner, the
+    // one Shift+Arrow / Shift+click / drag moves.
     let anchorCell = null;
+    let focusCell = null;
     let isSelecting = false;
     let dragMoved = false;
     let currentRange = null;
+    // Arrow keys belong to the grid only while the user is "in" it; after a
+    // click or focus elsewhere they go back to scrolling the page as usual.
+    let keyboardActive = false;
     let pasteInFlight = false;
 
     const getRows = () => [...table.querySelectorAll('tbody > tr[data-row-id]')];
@@ -44,10 +61,18 @@ export function setupGridSelection() {
         return rowIndex === -1 || colIndex === -1 ? null : { rowIndex, colIndex };
     }
 
+    function cellAt(pos) {
+        const row = getRows()[pos.rowIndex];
+        return row ? getCells(row)[pos.colIndex] ?? null : null;
+    }
+
     function clearSelection() {
         anchorCell = null;
+        focusCell = null;
         currentRange = null;
-        table.querySelectorAll('.grid-cell-selected').forEach((el) => el.classList.remove('grid-cell-selected'));
+        table.querySelectorAll('.grid-cell-selected, .grid-cell-active').forEach((el) => {
+            el.classList.remove('grid-cell-selected', 'grid-cell-active');
+        });
     }
 
     /** Runs callback(td, rowIndex, colIndex) for every cell in range that still exists. */
@@ -67,7 +92,9 @@ export function setupGridSelection() {
     }
 
     function highlightRange(a, b) {
-        table.querySelectorAll('.grid-cell-selected').forEach((el) => el.classList.remove('grid-cell-selected'));
+        table.querySelectorAll('.grid-cell-selected, .grid-cell-active').forEach((el) => {
+            el.classList.remove('grid-cell-selected', 'grid-cell-active');
+        });
 
         const range = {
             rowStart: Math.min(a.rowIndex, b.rowIndex),
@@ -77,6 +104,8 @@ export function setupGridSelection() {
         };
 
         forEachCellInRange(range, (td) => td.classList.add('grid-cell-selected'));
+        cellAt(a)?.classList.add('grid-cell-active');
+        focusCell = { rowIndex: b.rowIndex, colIndex: b.colIndex };
 
         return range;
     }
@@ -116,6 +145,7 @@ export function setupGridSelection() {
             return;
         }
 
+        keyboardActive = true;
         if (event.shiftKey && anchorCell) {
             currentRange = highlightRange(anchorCell, pos);
             dragMoved = true; // suppress this click's own edit-open too
@@ -123,6 +153,7 @@ export function setupGridSelection() {
             return;
         }
 
+        keyboardActive = true;
         anchorCell = pos;
         isSelecting = true;
         dragMoved = false;
@@ -176,14 +207,101 @@ export function setupGridSelection() {
         dragMoved = false;
     }, true);
 
+    document.addEventListener('mousedown', (event) => {
+        if (!event.target.closest?.('table[data-grid] td[data-field]')) {
+            keyboardActive = false;
+        }
+    }, true);
+    document.addEventListener('focusin', (event) => {
+        if (!event.target.closest?.('td[data-field]')) {
+            keyboardActive = false;
+        }
+    });
+
+    /**
+     * Closes visible cell editors (as if Escape were pressed in them), except
+     * the one with focus and any inside exceptTd.
+     */
+    function closeOtherEditors(exceptTd = null) {
+        table.querySelectorAll('td[data-field] [name="value"]').forEach((field) => {
+            if (field !== document.activeElement && !exceptTd?.contains(field) && field.getClientRects().length > 0) {
+                // Bubbles to the cell's x-on:keydown.escape: restore + close.
+                field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            }
+        });
+    }
+
+    const ARROW_DELTAS = {
+        ArrowUp: [-1, 0],
+        ArrowDown: [1, 0],
+        ArrowLeft: [0, -1],
+        ArrowRight: [0, 1],
+    };
+
+    /** True while the user is typing into a visible form control (cell editor, search box, ...). */
+    function isTypingInField() {
+        const active = document.activeElement;
+        if (!active || !['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) {
+            return false;
+        }
+        // After Escape, Alpine hides the cell editor with x-show but the
+        // hidden control keeps focus; that shouldn't block grid navigation.
+        return active.getClientRects().length > 0;
+    }
+
+    document.addEventListener('keydown', (event) => {
+        const delta = ARROW_DELTAS[event.key];
+        if (!delta || !anchorCell || !keyboardActive || event.altKey || event.isComposing || isTypingInField()) {
+            return;
+        }
+
+        const rows = getRows();
+        const colCount = rows.length ? getCells(rows[0]).length : 0;
+        if (rows.length === 0 || colCount === 0) {
+            return;
+        }
+
+        const toEdge = event.metaKey || event.ctrlKey;
+        const from = event.shiftKey ? focusCell : anchorCell;
+        const clamp = (value, max) => Math.min(Math.max(value, 0), max);
+        const jump = (current, d, max) => (d === 0 ? current : toEdge ? (d < 0 ? 0 : max) : current + d);
+        const next = {
+            rowIndex: clamp(jump(from.rowIndex, delta[0], rows.length - 1), rows.length - 1),
+            colIndex: clamp(jump(from.colIndex, delta[1], colCount - 1), colCount - 1),
+        };
+
+        event.preventDefault();
+        closeOtherEditors();
+
+        if (event.shiftKey) {
+            currentRange = highlightRange(anchorCell, next);
+        } else {
+            anchorCell = next;
+            currentRange = highlightRange(next, next);
+        }
+
+        cellAt(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+
+    // Only one cell is in edit mode at a time: opening a cell (Alpine's own
+    // @click on its display span, which a drag/shift-click suppresses in the
+    // capture handler above) returns every other open cell to normal. A
+    // focused editor with typed changes has already blurred — and so
+    // committed them via hx-trigger="change" — by the time this click runs.
+    table.addEventListener('click', (event) => {
+        const td = event.target.closest('td[data-field]');
+        if (td && !event.target.closest('input, textarea, select')) {
+            closeOtherEditors(td);
+        }
+    });
+
     document.addEventListener('keydown', (event) => {
         const metaOrCtrl = event.metaKey || event.ctrlKey;
         if (!metaOrCtrl || !currentRange) {
             return;
         }
 
-        const active = document.activeElement;
-        if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) {
+        if (isTypingInField()) {
             // A cell is actively being edited: let the browser's native
             // copy/paste work on that field instead of the grid-level one.
             return;
