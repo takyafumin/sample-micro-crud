@@ -99,6 +99,13 @@ export function setupGridSelection() {
     });
 
     table.addEventListener('mousedown', (event) => {
+        // Let a mousedown inside the cell's own editing control (positioning
+        // the cursor, selecting text to retype) behave natively instead of
+        // re-arming the grid selection around the cell being edited.
+        if (event.target.closest('input, textarea, select')) {
+            return;
+        }
+
         const td = event.target.closest('td[data-field]');
         if (!td) {
             return;
@@ -246,7 +253,11 @@ export function setupGridSelection() {
             return name;
         }
 
-        const match = [...select.options].find((option) => option.textContent.trim() === name.trim());
+        // Collapse whitespace the same way cellDisplayText() does when copying,
+        // so an assignee name containing runs of whitespace still round-trips
+        // (copy -> paste back unchanged) instead of failing to match here.
+        const normalize = (value) => value.replace(/\s+/g, ' ').trim();
+        const match = [...select.options].find((option) => normalize(option.textContent) === normalize(name));
 
         // Fall back to the raw pasted text if there's no matching assignee
         // (e.g. renamed/deleted since the page loaded); the server's
@@ -293,6 +304,14 @@ export function setupGridSelection() {
         for (let r = 0; r < pasteRows.length; r++) {
             const rowIndex = range.rowStart + r;
             if (rowIndex >= rows.length) {
+                break;
+            }
+
+            // The row could have been deleted (and htmx:beforeSwap already
+            // cleared the selection) by the time this iteration's turn comes
+            // up, since each cell's PATCH below is awaited one at a time.
+            // Stop rather than keep PATCHing a detached row's stale id.
+            if (!rows[rowIndex].isConnected) {
                 break;
             }
 
