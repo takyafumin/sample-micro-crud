@@ -25,3 +25,10 @@
     outline: 1px solid var(--color-blue-400);
     outline-offset: -1px;
 }
+
+/* The active cell (selection anchor), as in a spreadsheet: a thicker border
+   so it stays distinguishable inside a multi-cell range. */
+.grid-cell-active {
+    outline: 2px solid var(--color-blue-600);
+    outline-offset: -2px;
+}
