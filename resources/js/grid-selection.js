@@ -8,7 +8,9 @@
  * - Drag, or Shift+click, selects a rectangular range instead and suppresses
  *   that click's "open for editing" behavior.
  * - Keyboard, as in a spreadsheet (only after the last click landed on a
- *   grid cell, and never while the user is typing into a focused field):
+ *   grid cell, and never while the user is typing into a focused text
+ *   field — after a click opens a cell, press Escape to get back to grid
+ *   navigation; a focused select is the exception, see focusedCellSelect):
  *   Arrow moves the active cell and collapses the selection to it;
  *   Shift+Arrow keeps the active cell (anchor) fixed and grows/shrinks the
  *   range's opposite corner one cell at a time; Ctrl/Cmd+Arrow and
@@ -148,6 +150,13 @@ export function setupGridSelection() {
 
         keyboardActive = true;
         if (event.shiftKey && anchorCell) {
+            // preventDefault below keeps focus where it is, which after a
+            // click is the first cell's editor; Ctrl/Cmd+C/V and Shift+Arrow
+            // would then act on that field instead of the range. Hand focus
+            // back to the grid: blurring commits any typed change (change ->
+            // PATCH), then the now-unfocused editor is closed.
+            releaseFocusedCellEditor();
+            closeOtherEditors();
             currentRange = highlightRange(anchorCell, pos);
             dragMoved = true; // suppress this click's own edit-open too
             event.preventDefault();
@@ -239,6 +248,25 @@ export function setupGridSelection() {
         ArrowRight: [0, 1],
     };
 
+    /** Blurs the focused cell editor in this table, if any. */
+    function releaseFocusedCellEditor() {
+        const active = document.activeElement;
+        if (active && active.name === 'value' && active.closest('td[data-field]') && table.contains(active)) {
+            active.blur();
+        }
+    }
+
+    /**
+     * A focused, visible <select> cell editor. Arrow keys on it are treated
+     * as grid navigation: on Windows/Linux an arrow on a closed select would
+     * otherwise change its value and fire change -> an unintended save.
+     */
+    function focusedCellSelect() {
+        const active = document.activeElement;
+        return active?.tagName === 'SELECT' && active.closest('td[data-field]') && table.contains(active)
+            && active.getClientRects().length > 0 ? active : null;
+    }
+
     /** True while the user is typing into a visible form control (cell editor, search box, ...). */
     function isTypingInField() {
         const active = document.activeElement;
@@ -252,7 +280,8 @@ export function setupGridSelection() {
 
     document.addEventListener('keydown', (event) => {
         const delta = ARROW_DELTAS[event.key];
-        if (!delta || !anchorCell || !keyboardActive || event.altKey || event.isComposing || isTypingInField()) {
+        if (!delta || !anchorCell || !keyboardActive || event.altKey || event.isComposing
+            || (isTypingInField() && !focusedCellSelect())) {
             return;
         }
 
@@ -272,6 +301,7 @@ export function setupGridSelection() {
         };
 
         event.preventDefault();
+        releaseFocusedCellEditor();
         closeOtherEditors();
 
         if (event.shiftKey) {
@@ -294,6 +324,13 @@ export function setupGridSelection() {
         const root = td.querySelector('[x-data]');
         const field = td.querySelector('[name="value"]');
         if (!root || !field || !window.Alpine) {
+            return;
+        }
+
+        // Clicking the padding of the cell being edited blurs its field, which
+        // fires change -> PATCH; the response will replace this cell, so
+        // re-focusing the doomed field would silently drop anything typed.
+        if (field.classList.contains('htmx-request')) {
             return;
         }
 
@@ -345,13 +382,14 @@ export function setupGridSelection() {
     });
 
     // Escape cancels the edit (restores the original value and closes) even
-    // when the editor doesn't have focus (e.g. the user clicked elsewhere on
-    // the page). A focused editor handles Escape itself via
-    // x-on:keydown.escape.
+    // when the editor doesn't have focus (e.g. focus moved elsewhere, or a
+    // failed save re-rendered it unfocused). A focused editor handles Escape
+    // itself via x-on:keydown.escape. Not gated on keyboardActive: it only
+    // ever closes unfocused grid editors, so it's safe from anywhere.
     document.addEventListener('keydown', (event) => {
         // Ignore the synthetic Escapes closeOtherEditors() dispatches, which
         // bubble up to here too.
-        if (event.key !== 'Escape' || !event.isTrusted || !keyboardActive || event.isComposing) {
+        if (event.key !== 'Escape' || !event.isTrusted || event.isComposing) {
             return;
         }
         closeOtherEditors();
