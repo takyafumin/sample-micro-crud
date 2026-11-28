@@ -16,6 +16,7 @@
  *   A cell editor left open by a click (it opens without taking focus) is
  *   closed as if Escape were pressed, so the highlight never moves away
  *   from a still-open editor.
+ * - Only one cell is in edit mode at a time: opening a cell closes the others.
  * - Ctrl/Cmd+C copies the selected range's displayed values as TSV, unless
  *   the browser already has a native text selection (then that's copied
  *   instead, as the user would expect anywhere else on the page).
@@ -217,10 +218,13 @@ export function setupGridSelection() {
         }
     });
 
-    /** Closes cell editors that are visible but don't have focus (opened by a click, or by a validation error). */
-    function closeUnfocusedEditors() {
+    /**
+     * Closes visible cell editors (as if Escape were pressed in them), except
+     * the one with focus and any inside exceptTd.
+     */
+    function closeOtherEditors(exceptTd = null) {
         table.querySelectorAll('td[data-field] [name="value"]').forEach((field) => {
-            if (field !== document.activeElement && field.getClientRects().length > 0) {
+            if (field !== document.activeElement && !exceptTd?.contains(field) && field.getClientRects().length > 0) {
                 // Bubbles to the cell's x-on:keydown.escape: restore + close.
                 field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             }
@@ -267,7 +271,7 @@ export function setupGridSelection() {
         };
 
         event.preventDefault();
-        closeUnfocusedEditors();
+        closeOtherEditors();
 
         if (event.shiftKey) {
             currentRange = highlightRange(anchorCell, next);
@@ -277,6 +281,18 @@ export function setupGridSelection() {
         }
 
         cellAt(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+
+    // Only one cell is in edit mode at a time: opening a cell (Alpine's own
+    // @click on its display span, which a drag/shift-click suppresses in the
+    // capture handler above) returns every other open cell to normal. A
+    // focused editor with typed changes has already blurred — and so
+    // committed them via hx-trigger="change" — by the time this click runs.
+    table.addEventListener('click', (event) => {
+        const td = event.target.closest('td[data-field]');
+        if (td && !event.target.closest('input, textarea, select')) {
+            closeOtherEditors(td);
+        }
     });
 
     document.addEventListener('keydown', (event) => {
