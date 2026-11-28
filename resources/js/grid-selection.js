@@ -234,6 +234,13 @@ export function setupGridSelection() {
      */
     function closeOtherEditors(exceptTd = null) {
         table.querySelectorAll('td[data-field] [name="value"]').forEach((field) => {
+            // A field whose save is in flight (blurring it fired change ->
+            // PATCH) is left alone: on success the response replaces the
+            // cell anyway, and on failure reverting it would silently throw
+            // away what the user typed — keep it open so they can retry.
+            if (field.classList.contains('htmx-request')) {
+                return;
+            }
             if (field !== document.activeElement && !exceptTd?.contains(field) && field.getClientRects().length > 0) {
                 // Bubbles to the cell's x-on:keydown.escape: restore + close.
                 field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
