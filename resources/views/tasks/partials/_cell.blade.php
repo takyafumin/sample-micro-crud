@@ -43,7 +43,7 @@
     <div
         x-show="editing"
         x-cloak
-        x-on:keydown.escape="$refs.field.value = original; editing = false"
+        x-on:keydown.escape="$refs.field.value = original; editing = false; $refs.field.blur()"
     >
         @switch($type)
             @case('select')

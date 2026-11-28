@@ -16,6 +16,8 @@
  *   A cell editor left open by a click (it opens without taking focus) is
  *   closed as if Escape were pressed, so the highlight never moves away
  *   from a still-open editor.
+ * - Enter opens the active cell for editing with its field focused; Escape
+ *   cancels an open edit (restores the original value and closes it).
  * - Only one cell is in edit mode at a time: opening a cell closes the others.
  * - Ctrl/Cmd+C copies the selected range's displayed values as TSV, unless
  *   the browser already has a native text selection (then that's copied
@@ -281,6 +283,61 @@ export function setupGridSelection() {
         }
 
         cellAt(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+
+    // Enter on the active cell opens it for editing with the field focused,
+    // as in a spreadsheet. Listening on keyup (not keydown) matters: focus
+    // only moves into the field after the key is released, so the field's
+    // own hx-trigger="keyup[key=='Enter']" never sees this keystroke and
+    // doesn't immediately commit the value it was just opened with.
+    document.addEventListener('keyup', (event) => {
+        if (event.key !== 'Enter' || !anchorCell || !keyboardActive || event.isComposing
+            || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isTypingInField()) {
+            return;
+        }
+
+        const td = cellAt(anchorCell);
+        const display = td?.querySelector('[x-data] > span');
+        const field = td?.querySelector('[name="value"]');
+        if (!display || !field) {
+            return;
+        }
+
+        // Goes through the same @click path as a mouse click (which also
+        // closes any other open editor via the click listener below).
+        display.click();
+        // Alpine's x-show reveals the editor on a later animation frame, and a
+        // display:none field can't take focus, so wait (briefly) until it's
+        // visible. Give up if the cell was closed or swapped out meanwhile.
+        let attempts = 0;
+        const focusWhenVisible = () => {
+            if (!field.isConnected) {
+                return;
+            }
+            if (field.getClientRects().length === 0) {
+                if (++attempts < 30) {
+                    setTimeout(focusWhenVisible, 16);
+                }
+                return;
+            }
+            field.focus();
+            if (typeof field.select === 'function' && field.type !== 'date') {
+                field.select();
+            }
+        };
+        focusWhenVisible();
+    });
+
+    // Escape cancels the edit (restores the original value and closes) even
+    // when the editor was opened by a click and so never took focus. A
+    // focused editor handles Escape itself via x-on:keydown.escape.
+    document.addEventListener('keydown', (event) => {
+        // Ignore the synthetic Escapes closeOtherEditors() dispatches, which
+        // bubble up to here too.
+        if (event.key !== 'Escape' || !event.isTrusted || !keyboardActive || event.isComposing) {
+            return;
+        }
+        closeOtherEditors();
     });
 
     // Only one cell is in edit mode at a time: opening a cell (Alpine's own
