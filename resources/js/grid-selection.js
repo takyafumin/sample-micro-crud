@@ -337,9 +337,23 @@ export function setupGridSelection() {
         closeOtherEditors(td);
         window.Alpine.$data(root).editing = true;
 
-        // Alpine's x-show reveals the editor on a later animation frame, and a
-        // display:none field can't take focus, so wait (briefly) until it's
-        // visible. Give up if the cell was closed or swapped out meanwhile.
+        // Reveal the editor right now instead of waiting for x-show, which
+        // applies on a later animation frame / timer (heavily throttled when
+        // the page is in the background). Until then the field can't take
+        // focus, and whatever the user types in that gap is silently lost.
+        // Alpine's own x-show update lands on the same state afterwards.
+        const editor = field.closest('[x-show]');
+        const display = root.querySelector(':scope > span[x-show]');
+        if (editor && root.contains(editor)) {
+            editor.style.removeProperty('display');
+        }
+        if (display) {
+            display.style.display = 'none';
+        }
+
+        // Normally visible already (see above); as a fallback, a display:none
+        // field can't take focus, so wait briefly until it is. Give up if the
+        // cell was closed or swapped out meanwhile.
         let attempts = 0;
         const focusWhenVisible = () => {
             if (!field.isConnected) {
